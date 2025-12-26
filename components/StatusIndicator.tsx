@@ -25,63 +25,26 @@ export function StatusIndicator({
   const getStatusDisplay = () => {
     switch (status) {
       case 'idle':
-        return {
-          icon: null,
-          text: 'Ready',
-          color: 'text-zinc-500',
-          bgColor: 'bg-zinc-800',
-        }
+        return { icon: null, text: 'Ready', color: 'text-gray-500', bgColor: 'bg-gray-100' }
       case 'claude-coding':
-        return {
-          icon: <Bot className="w-4 h-4 animate-pulse" />,
-          text: 'Claude: Coding...',
-          color: 'text-jam-claude',
-          bgColor: 'bg-jam-claude/10',
-        }
+        return { icon: <Bot className="w-4 h-4 animate-pulse" />, text: 'Claude: Coding...', color: 'text-jam-claude', bgColor: 'bg-amber-50' }
       case 'gemini-auditing':
-        return {
-          icon: <Sparkles className="w-4 h-4 animate-pulse" />,
-          text: 'Gemini: Auditing...',
-          color: 'text-jam-gemini',
-          bgColor: 'bg-jam-gemini/10',
-        }
+        return { icon: <Sparkles className="w-4 h-4 animate-pulse" />, text: 'Gemini: Auditing...', color: 'text-jam-gemini', bgColor: 'bg-blue-50' }
       case 'debate':
-        return {
-          icon: <AlertCircle className="w-4 h-4" />,
-          text: `Debate in Progress (${debateTurn}/${maxDebateTurns})`,
-          color: 'text-yellow-500',
-          bgColor: 'bg-yellow-500/10',
-        }
+        return { icon: <AlertCircle className="w-4 h-4" />, text: `Debate in Progress (${debateTurn}/${maxDebateTurns})`, color: 'text-yellow-600', bgColor: 'bg-yellow-50' }
       case 'executing':
-        return {
-          icon: null,
-          text: 'Executing in E2B...',
-          color: 'text-green-500',
-          bgColor: 'bg-green-500/10',
-        }
+        return { icon: null, text: 'Executing in E2B...', color: 'text-green-600', bgColor: 'bg-green-50' }
       case 'complete':
-        return {
-          icon: <CheckCircle2 className="w-4 h-4" />,
-          text: 'Complete',
-          color: 'text-jam-success',
-          bgColor: 'bg-jam-success/10',
-        }
+        return { icon: <CheckCircle2 className="w-4 h-4" />, text: 'Complete', color: 'text-jam-success', bgColor: 'bg-green-50' }
       case 'error':
-        return {
-          icon: <AlertCircle className="w-4 h-4" />,
-          text: 'Error',
-          color: 'text-red-500',
-          bgColor: 'bg-red-500/10',
-        }
+        return { icon: <AlertCircle className="w-4 h-4" />, text: 'Error', color: 'text-red-600', bgColor: 'bg-red-50' }
     }
   }
 
   const { icon, text, color, bgColor } = getStatusDisplay()
 
   return (
-    <div
-      className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-full text-sm ${color} ${bgColor}`}
-    >
+    <div className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-full text-sm ${color} ${bgColor}`}>
       {icon}
       <span>{text}</span>
     </div>

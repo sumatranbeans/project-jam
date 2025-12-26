@@ -23,9 +23,7 @@ export function OutputPanel({
   previewUrl,
   fileTree,
 }: OutputPanelProps) {
-  const [activeTab, setActiveTab] = useState<'terminal' | 'preview' | 'files'>(
-    'terminal'
-  )
+  const [activeTab, setActiveTab] = useState<'terminal' | 'preview' | 'files'>('terminal')
 
   const getStatusColor = () => {
     switch (sandboxStatus) {
@@ -36,7 +34,7 @@ export function OutputPanel({
       case 'error':
         return 'bg-red-500'
       default:
-        return 'bg-zinc-600'
+        return 'bg-gray-400'
     }
   }
 
@@ -45,25 +43,24 @@ export function OutputPanel({
       case 'command':
         return 'text-jam-claude'
       case 'stderr':
-        return 'text-red-400'
+        return 'text-red-600'
       case 'system':
-        return 'text-zinc-500'
+        return 'text-gray-500'
       default:
-        return 'text-zinc-300'
+        return 'text-gray-700'
     }
   }
 
   return (
-    <div className="flex flex-col h-full bg-jam-bg">
-      {/* Header with tabs */}
+    <div className="flex flex-col h-full bg-white">
       <div className="flex items-center justify-between px-4 py-2 border-b border-jam-border">
         <div className="flex gap-1">
           <button
             onClick={() => setActiveTab('terminal')}
             className={`flex items-center gap-2 px-3 py-1.5 rounded text-sm transition-colors ${
               activeTab === 'terminal'
-                ? 'bg-zinc-800 text-white'
-                : 'text-zinc-500 hover:text-zinc-300'
+                ? 'bg-gray-100 text-gray-900'
+                : 'text-gray-500 hover:text-gray-700'
             }`}
           >
             <Terminal className="w-4 h-4" />
@@ -73,8 +70,8 @@ export function OutputPanel({
             onClick={() => setActiveTab('preview')}
             className={`flex items-center gap-2 px-3 py-1.5 rounded text-sm transition-colors ${
               activeTab === 'preview'
-                ? 'bg-zinc-800 text-white'
-                : 'text-zinc-500 hover:text-zinc-300'
+                ? 'bg-gray-100 text-gray-900'
+                : 'text-gray-500 hover:text-gray-700'
             }`}
           >
             <Eye className="w-4 h-4" />
@@ -84,8 +81,8 @@ export function OutputPanel({
             onClick={() => setActiveTab('files')}
             className={`flex items-center gap-2 px-3 py-1.5 rounded text-sm transition-colors ${
               activeTab === 'files'
-                ? 'bg-zinc-800 text-white'
-                : 'text-zinc-500 hover:text-zinc-300'
+                ? 'bg-gray-100 text-gray-900'
+                : 'text-gray-500 hover:text-gray-700'
             }`}
           >
             <FolderTree className="w-4 h-4" />
@@ -94,25 +91,21 @@ export function OutputPanel({
         </div>
         <div className="flex items-center gap-2">
           <Circle className={`w-2 h-2 ${getStatusColor()}`} fill="currentColor" />
-          <span className="text-xs text-zinc-500 capitalize">{sandboxStatus}</span>
+          <span className="text-xs text-gray-500 capitalize">{sandboxStatus}</span>
         </div>
       </div>
 
-      {/* Content */}
       <div className="flex-1 overflow-hidden">
         {activeTab === 'terminal' && (
-          <div className="h-full overflow-y-auto p-4 terminal-output bg-black/50">
+          <div className="h-full overflow-y-auto p-4 terminal-output bg-gray-50">
             {lines.length === 0 ? (
-              <div className="text-zinc-600">
-                <span className="text-zinc-500">$</span> Sandbox ready. Waiting for
-                commands...
+              <div className="text-gray-500">
+                <span className="text-gray-400">$</span> Sandbox ready. Waiting for commands...
               </div>
             ) : (
               lines.map((line) => (
                 <div key={line.id} className={`${getLineColor(line.type)}`}>
-                  {line.type === 'command' && (
-                    <span className="text-zinc-500">$ </span>
-                  )}
+                  {line.type === 'command' && <span className="text-gray-400">$ </span>}
                   {line.content}
                 </div>
               ))
@@ -121,15 +114,11 @@ export function OutputPanel({
         )}
 
         {activeTab === 'preview' && (
-          <div className="h-full flex items-center justify-center">
+          <div className="h-full flex items-center justify-center bg-gray-50">
             {previewUrl ? (
-              <iframe
-                src={previewUrl}
-                className="w-full h-full border-0"
-                title="Preview"
-              />
+              <iframe src={previewUrl} className="w-full h-full border-0" title="Preview" />
             ) : (
-              <div className="text-zinc-500 text-sm">
+              <div className="text-gray-500 text-sm">
                 No preview available. Run a dev server to see output here.
               </div>
             )}
@@ -137,17 +126,15 @@ export function OutputPanel({
         )}
 
         {activeTab === 'files' && (
-          <div className="h-full overflow-y-auto p-4">
+          <div className="h-full overflow-y-auto p-4 bg-gray-50">
             {fileTree && fileTree.length > 0 ? (
               <ul className="space-y-1 text-sm font-mono">
                 {fileTree.map((file, i) => (
-                  <li key={i} className="text-zinc-400 hover:text-zinc-200">
-                    {file}
-                  </li>
+                  <li key={i} className="text-gray-600 hover:text-gray-900">{file}</li>
                 ))}
               </ul>
             ) : (
-              <div className="text-zinc-500 text-sm">
+              <div className="text-gray-500 text-sm">
                 No files yet. Start building to see the file tree.
               </div>
             )}

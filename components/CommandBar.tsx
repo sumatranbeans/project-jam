@@ -41,23 +41,19 @@ export function CommandBar({
             placeholder={placeholder}
             disabled={disabled}
             rows={1}
-            className="w-full resize-none rounded-lg border border-jam-border bg-jam-bg px-4 py-3 text-sm text-zinc-200 placeholder-zinc-600 focus:outline-none focus:ring-2 focus:ring-jam-claude/50 focus:border-jam-claude/50 disabled:opacity-50"
+            className="w-full resize-none rounded-lg border border-jam-border bg-white px-4 py-3 text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-jam-claude/50 focus:border-jam-claude/50 disabled:opacity-50"
             style={{ minHeight: '48px', maxHeight: '200px' }}
           />
         </div>
         <button
           onClick={handleSubmit}
           disabled={disabled || !input.trim()}
-          className="flex items-center justify-center w-12 h-12 rounded-lg bg-jam-claude text-white hover:bg-jam-claude/80 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+          className="flex items-center justify-center w-12 h-12 rounded-lg bg-jam-claude text-white hover:bg-jam-claude/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
         >
-          {disabled ? (
-            <Loader2 className="w-5 h-5 animate-spin" />
-          ) : (
-            <Send className="w-5 h-5" />
-          )}
+          {disabled ? <Loader2 className="w-5 h-5 animate-spin" /> : <Send className="w-5 h-5" />}
         </button>
       </div>
-      <div className="flex items-center justify-center gap-4 mt-2 text-xs text-zinc-600">
+      <div className="flex items-center justify-center gap-4 mt-2 text-xs text-gray-400">
         <span>Enter to send</span>
         <span>•</span>
         <span>Shift+Enter for new line</span>

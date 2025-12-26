@@ -9,12 +9,12 @@ const config: Config = {
   theme: {
     extend: {
       colors: {
-        'jam-bg': '#0a0a0a',
-        'jam-surface': '#141414',
-        'jam-border': '#262626',
+        'jam-bg': '#ffffff',
+        'jam-surface': '#f9fafb',
+        'jam-border': '#e5e7eb',
         'jam-claude': '#d97706',
         'jam-gemini': '#3b82f6',
-        'jam-success': '#22c55e',
+        'jam-success': '#16a34a',
       },
     },
   },

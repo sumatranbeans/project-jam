@@ -44,31 +44,29 @@ export function BrainPanel({ messages, status }: BrainPanelProps) {
   const getRoleColor = (role: Message['role']) => {
     switch (role) {
       case 'claude':
-        return 'border-jam-claude/30 bg-jam-claude/5'
+        return 'border-jam-claude/30 bg-amber-50'
       case 'gemini':
-        return 'border-jam-gemini/30 bg-jam-gemini/5'
+        return 'border-jam-gemini/30 bg-blue-50'
       case 'user':
-        return 'border-zinc-700 bg-zinc-800/50'
+        return 'border-gray-200 bg-gray-50'
       default:
-        return 'border-zinc-800 bg-zinc-900/50'
+        return 'border-gray-200 bg-gray-50'
     }
   }
 
   return (
-    <div className="flex flex-col h-full">
-      {/* Header */}
+    <div className="flex flex-col h-full bg-white">
       <div className="flex items-center justify-between px-4 py-3 border-b border-jam-border">
         <div className="flex items-center gap-2">
           <div className="w-2 h-2 rounded-full bg-jam-success animate-pulse" />
-          <span className="text-sm font-medium text-zinc-300">The Brain</span>
+          <span className="text-sm font-medium text-gray-700">The Brain</span>
         </div>
-        <span className="text-xs text-zinc-500">{status}</span>
+        <span className="text-xs text-gray-500">{status}</span>
       </div>
 
-      {/* Messages */}
       <div className="flex-1 overflow-y-auto p-4 space-y-4">
         {messages.length === 0 ? (
-          <div className="flex flex-col items-center justify-center h-full text-zinc-500">
+          <div className="flex flex-col items-center justify-center h-full text-gray-400">
             <Bot className="w-12 h-12 mb-4 opacity-30" />
             <p className="text-sm">Start a conversation to see the agent dialogue</p>
           </div>
@@ -80,14 +78,14 @@ export function BrainPanel({ messages, status }: BrainPanelProps) {
             >
               <div className="flex items-center gap-2 mb-2">
                 {getRoleIcon(message.role)}
-                <span className="text-xs font-medium text-zinc-400">
+                <span className="text-xs font-medium text-gray-600">
                   {getRoleLabel(message.role)}
                 </span>
-                <span className="text-xs text-zinc-600 ml-auto">
+                <span className="text-xs text-gray-400 ml-auto">
                   {message.timestamp.toLocaleTimeString()}
                 </span>
               </div>
-              <div className="text-sm text-zinc-300 whitespace-pre-wrap">
+              <div className="text-sm text-gray-700 whitespace-pre-wrap">
                 {message.content}
               </div>
             </div>
