@@ -1,8 +1,7 @@
 'use client'
 
-import { useSession, signOut } from 'next-auth/react'
-import { useRouter } from 'next/navigation'
-import { useState, useCallback, useEffect } from 'react'
+import { useUser, SignOutButton } from '@clerk/nextjs'
+import { useState, useCallback } from 'react'
 import { BrainPanel, type Message } from '@/components/BrainPanel'
 import { OutputPanel, type TerminalLine } from '@/components/OutputPanel'
 import { CommandBar } from '@/components/CommandBar'
@@ -11,8 +10,7 @@ import { startSandboxAction, runCommandAction, listFilesAction } from './actions
 import { Zap, LogOut } from 'lucide-react'
 
 export default function Home() {
-  const { data: session, status } = useSession()
-  const router = useRouter()
+  const { user, isLoaded } = useUser()
   
   const [messages, setMessages] = useState<Message[]>([])
   const [terminalLines, setTerminalLines] = useState<TerminalLine[]>([])
@@ -21,12 +19,6 @@ export default function Home() {
   const [sandboxStatus, setSandboxStatus] = useState<'disconnected' | 'connecting' | 'active' | 'error'>('disconnected')
   const [fileTree, setFileTree] = useState<string[]>([])
   const [isProcessing, setIsProcessing] = useState(false)
-
-  useEffect(() => {
-    if (status === 'unauthenticated') {
-      router.push('/login')
-    }
-  }, [status, router])
 
   const addMessage = useCallback((role: Message['role'], content: string) => {
     const newMessage: Message = { id: crypto.randomUUID(), role, content, timestamp: new Date() }
@@ -88,12 +80,8 @@ export default function Home() {
     setIsProcessing(false)
   }
 
-  if (status === 'loading') {
+  if (!isLoaded) {
     return <div className="min-h-screen flex items-center justify-center bg-gray-50">Loading...</div>
-  }
-
-  if (!session) {
-    return null
   }
 
   return (
@@ -111,10 +99,12 @@ export default function Home() {
         <div className="flex items-center gap-4">
           <StatusIndicator status={agentStatus} />
           <div className="flex items-center gap-2 text-sm text-gray-600">
-            <span>{session.user?.name}</span>
-            <button onClick={() => signOut()} className="p-2 hover:bg-gray-100 rounded-lg" title="Sign out">
-              <LogOut className="w-4 h-4" />
-            </button>
+            <span>{user?.firstName || user?.emailAddresses[0]?.emailAddress}</span>
+            <SignOutButton>
+              <button className="p-2 hover:bg-gray-100 rounded-lg" title="Sign out">
+                <LogOut className="w-4 h-4" />
+              </button>
+            </SignOutButton>
           </div>
         </div>
       </header>
