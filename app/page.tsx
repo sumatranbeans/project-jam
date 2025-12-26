@@ -1,21 +1,32 @@
 'use client'
 
-import { useState, useCallback } from 'react'
+import { useSession, signOut } from 'next-auth/react'
+import { useRouter } from 'next/navigation'
+import { useState, useCallback, useEffect } from 'react'
 import { BrainPanel, type Message } from '@/components/BrainPanel'
 import { OutputPanel, type TerminalLine } from '@/components/OutputPanel'
 import { CommandBar } from '@/components/CommandBar'
 import { StatusIndicator, type AgentStatus } from '@/components/StatusIndicator'
 import { startSandboxAction, runCommandAction, listFilesAction } from './actions'
-import { Zap } from 'lucide-react'
+import { Zap, LogOut } from 'lucide-react'
 
 export default function Home() {
+  const { data: session, status } = useSession()
+  const router = useRouter()
+  
   const [messages, setMessages] = useState<Message[]>([])
   const [terminalLines, setTerminalLines] = useState<TerminalLine[]>([])
-  const [status, setStatus] = useState<AgentStatus>('idle')
+  const [agentStatus, setAgentStatus] = useState<AgentStatus>('idle')
   const [sandboxId, setSandboxId] = useState<string | null>(null)
   const [sandboxStatus, setSandboxStatus] = useState<'disconnected' | 'connecting' | 'active' | 'error'>('disconnected')
   const [fileTree, setFileTree] = useState<string[]>([])
   const [isProcessing, setIsProcessing] = useState(false)
+
+  useEffect(() => {
+    if (status === 'unauthenticated') {
+      router.push('/login')
+    }
+  }, [status, router])
 
   const addMessage = useCallback((role: Message['role'], content: string) => {
     const newMessage: Message = { id: crypto.randomUUID(), role, content, timestamp: new Date() }
@@ -31,11 +42,11 @@ export default function Home() {
     setSandboxStatus('connecting')
     addTerminalLine('system', 'Connecting to E2B sandbox...')
     try {
-      const session = await startSandboxAction()
-      setSandboxId(session.sandboxId)
+      const sbSession = await startSandboxAction()
+      setSandboxId(sbSession.sandboxId)
       setSandboxStatus('active')
-      addTerminalLine('system', `Connected to sandbox: ${session.sandboxId}`)
-      const filesResult = await listFilesAction(session.sandboxId)
+      addTerminalLine('system', `Connected to sandbox: ${sbSession.sandboxId}`)
+      const filesResult = await listFilesAction(sbSession.sandboxId)
       if (filesResult.files) setFileTree(filesResult.files)
     } catch (error) {
       setSandboxStatus('error')
@@ -65,16 +76,24 @@ export default function Home() {
     setIsProcessing(true)
     addMessage('user', message)
     if (!sandboxId) {
-      setStatus('executing')
+      setAgentStatus('executing')
       await connectSandbox()
     }
-    setStatus('claude-coding')
+    setAgentStatus('claude-coding')
     addMessage('claude', `I'll help you with: "${message}"\n\nLet me set up the environment...`)
     await runCommand('echo "Sandbox is ready!" && node --version && npm --version')
-    setStatus('gemini-auditing')
+    setAgentStatus('gemini-auditing')
     addMessage('gemini', 'I\'ve reviewed the setup. The sandbox environment is configured correctly with Node.js and npm available. Ready to proceed with development.')
-    setStatus('complete')
+    setAgentStatus('complete')
     setIsProcessing(false)
+  }
+
+  if (status === 'loading') {
+    return <div className="min-h-screen flex items-center justify-center bg-gray-50">Loading...</div>
+  }
+
+  if (!session) {
+    return null
   }
 
   return (
@@ -89,14 +108,22 @@ export default function Home() {
             <p className="text-xs text-gray-500">Claude builds • Gemini supervises</p>
           </div>
         </div>
-        <StatusIndicator status={status} />
+        <div className="flex items-center gap-4">
+          <StatusIndicator status={agentStatus} />
+          <div className="flex items-center gap-2 text-sm text-gray-600">
+            <span>{session.user?.name}</span>
+            <button onClick={() => signOut()} className="p-2 hover:bg-gray-100 rounded-lg" title="Sign out">
+              <LogOut className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
       </header>
 
       <div className="flex flex-1 overflow-hidden">
         <div className="w-1/2 border-r border-jam-border overflow-hidden">
           <BrainPanel
             messages={messages}
-            status={status === 'idle' ? 'Waiting for input' : status === 'claude-coding' ? 'Claude is thinking...' : status === 'gemini-auditing' ? 'Gemini is reviewing...' : 'Processing...'}
+            status={agentStatus === 'idle' ? 'Waiting for input' : agentStatus === 'claude-coding' ? 'Claude is thinking...' : agentStatus === 'gemini-auditing' ? 'Gemini is reviewing...' : 'Processing...'}
           />
         </div>
         <div className="w-1/2 overflow-hidden">
