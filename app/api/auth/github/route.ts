@@ -1,39 +1,18 @@
-// GitHub Actions
-export async function createRepoAction(name: string) {
-  const { userId } = await auth()
-  if (!userId) throw new Error('Not authenticated')
-  
-  const keys = await getApiKeys(userId)
-  if (!keys.github) throw new Error('GitHub not connected')
-  
-  const { createRepo, getUser } = await import('@/lib/github')
-  
-  const user = await getUser(keys.github)
-  const repo = await createRepo(keys.github, name, true)
-  
-  return { 
-    repoUrl: repo.html_url, 
-    owner: user.login, 
-    name: repo.name,
-    cloneUrl: repo.clone_url 
-  }
-}
+import { NextResponse } from 'next/server'
+import { auth } from '@clerk/nextjs/server'
 
-export async function commitFilesAction(
-  owner: string,
-  repo: string,
-  files: { path: string; content: string }[],
-  message: string
-) {
+export async function GET() {
   const { userId } = await auth()
-  if (!userId) throw new Error('Not authenticated')
-  
-  const keys = await getApiKeys(userId)
-  if (!keys.github) throw new Error('GitHub not connected')
-  
-  const { commitAndPush } = await import('@/lib/github')
-  
-  const commit = await commitAndPush(keys.github, owner, repo, files, message)
-  
-  return { sha: commit.sha, message: commit.message }
+  if (!userId) {
+    return NextResponse.redirect(new URL('/login', process.env.NEXT_PUBLIC_APP_URL))
+  }
+
+  const params = new URLSearchParams({
+    client_id: process.env.GITHUB_CLIENT_ID!,
+    redirect_uri: `${process.env.NEXT_PUBLIC_APP_URL}/api/auth/github/callback`,
+    scope: 'repo user:email',
+    state: userId,
+  })
+
+  return NextResponse.redirect(`https://github.com/login/oauth/authorize?${params}`)
 }
