@@ -1,3 +1,6 @@
+'use server'
+
+import { Sandbox } from 'e2b'
 import { auth } from '@clerk/nextjs/server'
 import { getApiKeys } from '@/lib/vault'
 
