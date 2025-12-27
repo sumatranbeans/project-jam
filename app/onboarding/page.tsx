@@ -1,10 +1,10 @@
 'use client'
-import { useState, useEffect } from 'react'
+import { useState, useEffect, Suspense } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { Zap, Key, Check, ArrowRight, Loader2, Github } from 'lucide-react'
 import { saveKeysAction, getKeysAction } from '../vault-actions'
 
-export default function OnboardingPage() {
+function OnboardingContent() {
   const router = useRouter()
   const searchParams = useSearchParams()
   const [step, setStep] = useState(1)
@@ -118,5 +118,13 @@ export default function OnboardingPage() {
         <p className="mt-6 text-xs text-gray-400 text-center">Your keys are encrypted and never exposed to the browser.</p>
       </div>
     </main>
+  )
+}
+
+export default function OnboardingPage() {
+  return (
+    <Suspense fallback={<div className="min-h-screen flex items-center justify-center bg-gray-50"><Loader2 className="w-8 h-8 animate-spin text-gray-400" /></div>}>
+      <OnboardingContent />
+    </Suspense>
   )
 }
