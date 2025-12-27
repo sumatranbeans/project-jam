@@ -45,7 +45,7 @@ export default function Home() {
     setTerminalLines((prev) => [...prev, { id: crypto.randomUUID(), type, content, timestamp: new Date() }])
   }, [])
 
-  const connectSandbox = async () => {
+  const connectSandbox = async (): Promise<string | null> => {
     setSandboxStatus('connecting')
     addTerminalLine('system', 'Connecting to E2B sandbox...')
     try {
@@ -55,34 +55,41 @@ export default function Home() {
       addTerminalLine('system', 'Connected to sandbox: ' + sbSession.sandboxId)
       const filesResult = await listFilesAction(sbSession.sandboxId)
       if (filesResult.files) setFileTree(filesResult.files)
+      return sbSession.sandboxId
     } catch (error) {
       setSandboxStatus('error')
       addTerminalLine('stderr', 'Failed to connect: ' + error)
-    }
-  }
-
-  const runCommand = async (command: string) => {
-    if (sandboxId === null) { addTerminalLine('stderr', 'No sandbox connected'); return }
-    addTerminalLine('command', command)
-    try {
-      const result = await runCommandAction(sandboxId, command)
-      if (result.stdout) result.stdout.split('\n').forEach((line) => { if (line.trim()) addTerminalLine('stdout', line) })
-      if (result.stderr) result.stderr.split('\n').forEach((line) => { if (line.trim()) addTerminalLine('stderr', line) })
-      const filesResult = await listFilesAction(sandboxId)
-      if (filesResult.files) setFileTree(filesResult.files)
-      return result
-    } catch (error) {
-      addTerminalLine('stderr', 'Command failed: ' + error)
+      return null
     }
   }
 
   const handleUserMessage = async (message: string) => {
     setIsProcessing(true)
     addMessage('user', message)
-    if (sandboxId === null) { setAgentStatus('executing'); await connectSandbox() }
+    
+    let currentSandboxId = sandboxId
+    if (currentSandboxId === null) {
+      setAgentStatus('executing')
+      currentSandboxId = await connectSandbox()
+    }
+    
+    if (currentSandboxId === null) {
+      setIsProcessing(false)
+      return
+    }
+    
     setAgentStatus('claude-coding')
     addMessage('claude', 'I will help you with: "' + message + '"\n\nLet me set up the environment...')
-    await runCommand('echo "Sandbox is ready!" && node --version && npm --version')
+    
+    addTerminalLine('command', 'echo "Sandbox is ready!" && node --version && npm --version')
+    try {
+      const result = await runCommandAction(currentSandboxId, 'echo "Sandbox is ready!" && node --version && npm --version')
+      if (result.stdout) result.stdout.split('\n').forEach((line) => { if (line.trim()) addTerminalLine('stdout', line) })
+      if (result.stderr) result.stderr.split('\n').forEach((line) => { if (line.trim()) addTerminalLine('stderr', line) })
+    } catch (error) {
+      addTerminalLine('stderr', 'Command failed: ' + error)
+    }
+    
     setAgentStatus('gemini-auditing')
     addMessage('gemini', 'I have reviewed the setup. The sandbox environment is configured correctly with Node.js and npm available. Ready to proceed.')
     setAgentStatus('complete')
