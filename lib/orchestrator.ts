@@ -13,33 +13,59 @@ export type Action = {
 }
 
 export type BuilderResponse = {
-  thinking: string
   actions: Action[]
+  requestReview: boolean
   response: string
 }
 
-export type ArchitectResponse = {
-  // Intake phase
-  needsClarification?: boolean
-  clarificationQuestion?: string
-  readyToBuild?: boolean
-  spec?: string
-  handoffToEngineer?: boolean
-  // Review phase
-  reviewNeeded?: boolean
-  approved?: boolean
-  reasoning?: string
-  corrections?: string
-  concerns?: string[]
-  loopDetected?: boolean
+export type ArchitectReview = {
+  approved: boolean
+  reasoning: string
+  concerns: string[]
 }
 
 export type OrchestrationResult = {
-  phase: 'clarification' | 'building' | 'review' | 'complete'
-  architectResponse?: ArchitectResponse
+  phase: 'clarification' | 'building' | 'review' | 'complete' | 'loop_detected'
+  architectMessage?: string
   builderPlan?: BuilderResponse
+  architectReview?: ArchitectReview
   approved: boolean
   finalActions: Action[]
+  error?: string
+}
+
+// Loop detection: track file states
+const recentFileStates: string[] = []
+
+function detectLoop(fileTree: string[]): boolean {
+  const currentState = JSON.stringify(fileTree.sort())
+  if (recentFileStates.length >= 2) {
+    const lastTwo = recentFileStates.slice(-2)
+    if (lastTwo[0] === currentState && lastTwo[1] === currentState) {
+      return true // Same state twice in a row
+    }
+  }
+  recentFileStates.push(currentState)
+  if (recentFileStates.length > 5) recentFileStates.shift()
+  return false
+}
+
+function validateJSON(raw: string): { valid: boolean; parsed?: unknown; error?: string } {
+  try {
+    const cleaned = raw.replace(/```json\n?|\n?```/g, '').trim()
+    const parsed = JSON.parse(cleaned)
+    return { valid: true, parsed }
+  } catch (e) {
+    return { valid: false, error: `Invalid JSON: ${e}` }
+  }
+}
+
+function buildContext(fileTree: string[], tasksContent?: string): string {
+  let context = `File tree:\n${fileTree.map(f => `- ${f}`).join('\n')}`
+  if (tasksContent) {
+    context += `\n\nActive Ledger (tasks.md):\n${tasksContent}`
+  }
+  return context
 }
 
 export async function orchestrate(
@@ -47,136 +73,129 @@ export async function orchestrate(
   geminiKey: string,
   directorIntent: string,
   fileTree: string[],
-  previousErrors?: string[]
+  tasksContent?: string
 ): Promise<OrchestrationResult> {
-  const context = `
-Current file tree:
-${fileTree.map(f => `- ${f}`).join('\n')}
+  
+  // Loop detection
+  if (detectLoop(fileTree)) {
+    return {
+      phase: 'loop_detected',
+      approved: false,
+      finalActions: [],
+      error: 'Loop detected: file state unchanged after multiple exchanges. Escalating to Director.'
+    }
+  }
 
-${previousErrors?.length ? `Previous errors to avoid:\n${previousErrors.join('\n')}` : ''}
-`.trim()
+  const context = buildContext(fileTree, tasksContent)
 
-  // PHASE 1: Architect assesses the request first (INTAKE)
-  const architectAssessment = await callGemini(
+  // PHASE 1: Architect intake
+  const architectResponse = await callGemini(
     geminiKey,
     ARCHITECT_INTAKE_PROMPT,
     `Director's request: "${directorIntent}"`,
     context
   )
 
-  let architectResponse: ArchitectResponse
-  try {
-    const cleaned = architectAssessment.replace(/```json\n?|\n?```/g, '').trim()
-    architectResponse = JSON.parse(cleaned)
-  } catch {
-    // If parsing fails, assume ready to build
-    architectResponse = {
-      needsClarification: false,
-      readyToBuild: true,
-      handoffToEngineer: true,
-      reviewNeeded: false
-    }
-  }
+  // Check if Architect is handing off or clarifying
+  const lowerResponse = architectResponse.toLowerCase()
+  const isHandoff = lowerResponse.includes('hand off') || 
+                    lowerResponse.includes('handoff') || 
+                    lowerResponse.includes('engineering lead') ||
+                    lowerResponse.includes('blueprint') ||
+                    lowerResponse.includes('build') ||
+                    lowerResponse.includes('implement') ||
+                    lowerResponse.includes('create')
+  
+  const isClarification = lowerResponse.includes('what would you like') ||
+                          lowerResponse.includes('could you clarify') ||
+                          lowerResponse.includes('can you tell me more') ||
+                          lowerResponse.includes('?')
 
-  // If Architect needs clarification, stop here — Engineer stays IDLE
-  if (architectResponse.needsClarification) {
+  // If clarification needed, stop here
+  if (isClarification && !isHandoff) {
     return {
       phase: 'clarification',
-      architectResponse,
+      architectMessage: architectResponse,
       approved: false,
       finalActions: []
     }
   }
 
-  // PHASE 2: Hand off to Engineering Lead if ready to build
-  if (architectResponse.handoffToEngineer && architectResponse.readyToBuild) {
-    const engineerPrompt = architectResponse.spec 
-      ? `Architect's spec:\n${architectResponse.spec}\n\nDirector's original request: "${directorIntent}"`
-      : directorIntent
+  // PHASE 2: Engineer builds
+  const engineerPrompt = `Product Architect's blueprint:\n${architectResponse}\n\nDirector's original request: "${directorIntent}"`
+  
+  const builderRaw = await callClaude(
+    claudeKey,
+    BUILDER_SYSTEM_PROMPT,
+    engineerPrompt,
+    context
+  )
 
-    const builderRaw = await callClaude(
-      claudeKey,
-      BUILDER_SYSTEM_PROMPT,
-      engineerPrompt,
-      context
-    )
-
-    let builderPlan: BuilderResponse
-    try {
-      const cleaned = builderRaw.replace(/```json\n?|\n?```/g, '').trim()
-      builderPlan = JSON.parse(cleaned)
-    } catch {
-      builderPlan = {
-        thinking: 'Failed to parse response',
-        actions: [],
-        response: builderRaw
-      }
-    }
-
-    // PHASE 3: Architect reviews ONLY if there are actions to review
-    if (builderPlan.actions && builderPlan.actions.length > 0) {
-      const reviewPrompt = `
-Director's intent: "${directorIntent}"
-
-Engineering Lead's plan:
-${JSON.stringify(builderPlan, null, 2)}
-
-Should this be approved for execution?
-`.trim()
-
-      const reviewRaw = await callGemini(
-        geminiKey,
-        ARCHITECT_REVIEW_PROMPT,
-        reviewPrompt,
-        context
-      )
-
-      let reviewResponse: ArchitectResponse
-      try {
-        const cleaned = reviewRaw.replace(/```json\n?|\n?```/g, '').trim()
-        reviewResponse = JSON.parse(cleaned)
-      } catch {
-        // If parsing fails, auto-approve
-        reviewResponse = {
-          reviewNeeded: true,
-          approved: true,
-          reasoning: 'Auto-approved (parse error)'
-        }
-      }
-
-      // If review not needed, skip the review message
-      if (reviewResponse.reviewNeeded === false) {
-        return {
-          phase: 'complete',
-          builderPlan,
-          approved: true,
-          finalActions: builderPlan.actions
-        }
-      }
-
-      return {
-        phase: 'complete',
-        architectResponse: reviewResponse,
-        builderPlan,
-        approved: reviewResponse.approved ?? true,
-        finalActions: reviewResponse.approved ? builderPlan.actions : []
-      }
-    }
-
-    // No actions to review — just return builder response without architect review
+  // Validate JSON from builder
+  const builderValidation = validateJSON(builderRaw)
+  if (!builderValidation.valid) {
     return {
       phase: 'building',
-      builderPlan,
-      approved: true,
-      finalActions: []
+      architectMessage: architectResponse,
+      approved: false,
+      finalActions: [],
+      error: `Engineer response error: ${builderValidation.error}`
     }
   }
 
-  // Fallback
+  const builderPlan = builderValidation.parsed as BuilderResponse
+
+  // PHASE 3: Check if review needed
+  const hasHighRiskActions = builderPlan.actions?.some(a => 
+    a.type === 'commit' || 
+    a.command?.includes('rm ') || 
+    a.command?.includes('delete')
+  )
+  
+  const needsReview = builderPlan.requestReview || hasHighRiskActions || (builderPlan.actions?.length > 0)
+
+  if (!needsReview) {
+    return {
+      phase: 'complete',
+      architectMessage: architectResponse,
+      builderPlan,
+      approved: true,
+      finalActions: builderPlan.actions || []
+    }
+  }
+
+  // PHASE 4: Architect reviews
+  const reviewPrompt = `Director's intent: "${directorIntent}"\n\nEngineering Lead's plan:\n${JSON.stringify(builderPlan, null, 2)}`
+  
+  const reviewRaw = await callGemini(
+    geminiKey,
+    ARCHITECT_REVIEW_PROMPT,
+    reviewPrompt,
+    context
+  )
+
+  const reviewValidation = validateJSON(reviewRaw)
+  let architectReview: ArchitectReview
+  
+  if (!reviewValidation.valid) {
+    // If review JSON fails, check for approval keywords
+    const approved = reviewRaw.toLowerCase().includes('approv')
+    architectReview = {
+      approved,
+      reasoning: reviewRaw,
+      concerns: []
+    }
+  } else {
+    architectReview = reviewValidation.parsed as ArchitectReview
+  }
+
+  // APPROVAL GATE: Only execute if approved
   return {
-    phase: 'clarification',
-    architectResponse,
-    approved: false,
-    finalActions: []
+    phase: 'complete',
+    architectMessage: architectResponse,
+    builderPlan,
+    architectReview,
+    approved: architectReview.approved,
+    finalActions: architectReview.approved ? (builderPlan.actions || []) : []
   }
 }
