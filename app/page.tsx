@@ -74,74 +74,89 @@ export default function Home() {
   }
 
   const handleUserMessage = async (message: string) => {
-    setIsProcessing(true)
-    addMessage('user', message)
+  setIsProcessing(true)
+  addMessage('user', message)
+  
+  let currentSandboxId = sandboxId
+  if (currentSandboxId === null) {
+    setAgentStatus('executing')
+    currentSandboxId = await connectSandbox()
+  }
+  
+  if (currentSandboxId === null) {
+    addMessage('system', 'Failed to connect to sandbox')
+    setIsProcessing(false)
+    return
+  }
+
+  try {
+    // Phase 1: Architect assesses first
+    setAgentStatus('gemini-auditing')
+    addTerminalLine('system', 'Product Architect analyzing request...')
     
-    let currentSandboxId = sandboxId
-    if (currentSandboxId === null) {
-      setAgentStatus('executing')
-      currentSandboxId = await connectSandbox()
-    }
+    const result = await orchestrateAction(message, currentSandboxId)
     
-    if (currentSandboxId === null) {
-      addMessage('system', 'Failed to connect to sandbox')
+    // If Architect needs clarification - only Architect speaks
+    if (result.phase === 'clarification' && result.architectResponse?.needsClarification) {
+      addMessage('gemini', result.architectResponse.clarificationQuestion || 'Could you clarify what you would like to build?')
+      setAgentStatus('idle')
       setIsProcessing(false)
       return
     }
-
-    try {
-      // Builder phase
-      setAgentStatus('claude-coding')
-      addTerminalLine('system', 'Builder (Claude) analyzing intent...')
-      
-      const result = await orchestrateAction(message, currentSandboxId)
-      
-      // Show Builder's plan
-      addMessage('claude', result.builderPlan.response, { thinking: result.builderPlan.thinking })
-      
-      // Supervisor phase
-      setAgentStatus('gemini-auditing')
-      addTerminalLine('system', 'Supervisor (Gemini) reviewing plan...')
-      
-      // Show Supervisor's review
-      addMessage('gemini', result.supervisorReview.reasoning, { approved: result.supervisorReview.approved })
-      
-      if (result.supervisorReview.concerns?.length > 0) {
-        addTerminalLine('system', 'Concerns: ' + result.supervisorReview.concerns.join(', '))
-      }
-
-      // Execute if approved
-      if (result.approved && result.finalActions.length > 0) {
-        setAgentStatus('executing')
-        addTerminalLine('system', 'Executing approved actions...')
-        
-        const execResults = await executeActionsAction(currentSandboxId, result.finalActions)
-        
-        for (const execResult of execResults) {
-          if (execResult.success) {
-            addTerminalLine('stdout', `✓ ${execResult.action}`)
-            if (execResult.output) addTerminalLine('stdout', execResult.output)
-          } else {
-            addTerminalLine('stderr', `✗ ${execResult.action}: ${execResult.output}`)
-          }
-        }
-        
-        // Refresh file tree
-        const filesResult = await listFilesAction(currentSandboxId)
-        if (filesResult.files) setFileTree(filesResult.files)
-      } else if (!result.approved) {
-        addTerminalLine('stderr', 'Plan vetoed by Supervisor: ' + result.supervisorReview.corrections)
-      }
-
-      setAgentStatus('complete')
-    } catch (error) {
-      addTerminalLine('stderr', 'Orchestration failed: ' + error)
-      addMessage('system', 'Something went wrong. Check the terminal for details.')
-      setAgentStatus('idle')
+    
+    // If there's a spec from Architect, show it
+    if (result.architectResponse?.spec) {
+      addMessage('gemini', `Here's my understanding:\n\n${result.architectResponse.spec}\n\nHanding off to Engineering Lead...`, { thinking: 'Creating technical specification' })
     }
 
-    setIsProcessing(false)
+    // Phase 2: Show Builder's work
+    if (result.builderPlan) {
+      setAgentStatus('claude-coding')
+      addTerminalLine('system', 'Engineering Lead building...')
+      addMessage('claude', result.builderPlan.response, { thinking: result.builderPlan.thinking })
+    }
+    
+    // Phase 3: Show Architect's review ONLY if there were actions and review was substantive
+    if (result.phase === 'complete' && result.architectResponse?.reviewNeeded !== false) {
+      setAgentStatus('gemini-auditing')
+      addTerminalLine('system', 'Product Architect reviewing...')
+      addMessage('gemini', result.architectResponse?.reasoning || 'Approved', { approved: result.approved })
+      
+      if (result.architectResponse?.concerns && result.architectResponse.concerns.length > 0) {
+        addTerminalLine('system', 'Concerns: ' + result.architectResponse.concerns.join(', '))
+      }
+    }
+
+    // Execute if approved
+    if (result.approved && result.finalActions.length > 0) {
+      setAgentStatus('executing')
+      addTerminalLine('system', 'Executing approved actions...')
+      
+      const execResults = await executeActionsAction(currentSandboxId, result.finalActions)
+      
+      for (const execResult of execResults) {
+        if (execResult.success) {
+          addTerminalLine('stdout', `✓ ${execResult.action}`)
+          if (execResult.output) addTerminalLine('stdout', execResult.output)
+        } else {
+          addTerminalLine('stderr', `✗ ${execResult.action}: ${execResult.output}`)
+        }
+      }
+      
+      // Refresh file tree
+      const filesResult = await listFilesAction(currentSandboxId)
+      if (filesResult.files) setFileTree(filesResult.files)
+    }
+
+    setAgentStatus('complete')
+  } catch (error) {
+    addTerminalLine('stderr', 'Orchestration failed: ' + error)
+    addMessage('system', 'Something went wrong. Check the terminal for details.')
+    setAgentStatus('idle')
   }
+
+  setIsProcessing(false)
+}
 
   if (isLoaded === false || checkingOnboarding) {
     return <div className="min-h-screen flex items-center justify-center bg-gray-50">Loading...</div>
