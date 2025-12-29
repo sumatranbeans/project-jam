@@ -39,8 +39,38 @@ export type OrchestrationResult = {
   silentRetry?: boolean
   resetStrategy?: string
   targetPath?: string
-  userFacingSummary?: string  // Progressive Disclosure: Director-facing message
-  issuesResolved?: number     // Count of auto-resolved issues
+  userFacingSummary?: string
+  issuesResolved?: number
+}
+
+// ============================================
+// ENVIRONMENT CONTEXT INJECTION (P0 Hotfix)
+// ============================================
+export function buildEnvironmentContext(sandboxId: string, fileTree: string[], executionHistory?: string[]): string {
+  const context = `
+### RUNTIME ENVIRONMENT
+- **Provider**: E2B Cloud Sandbox (Firecracker MicroVM)
+- **Sandbox ID**: ${sandboxId}
+- **Access**: Remote-only. There is NO localhost. The Director cannot access localhost URLs.
+- **Preview URL Pattern**: https://${sandboxId}-{PORT}.e2b.dev
+  - Example: https://${sandboxId}-5173.e2b.dev (Vite)
+  - Example: https://${sandboxId}-3000.e2b.dev (Next.js)
+  - Example: https://${sandboxId}-8080.e2b.dev (Python/Node server)
+- **Timeout**: Blocking commands >60s will be killed. For servers, the system handles background execution automatically.
+- **File Access**: Director cannot directly access sandbox files. Files must be served via preview URL or downloaded.
+
+### CRITICAL RULES
+1. NEVER suggest "localhost" or "127.0.0.1" — these are inaccessible to the Director
+2. ALWAYS use the preview URL pattern above when telling Director how to view the app
+3. For dev servers (npm run dev, python -m http.server, etc.), just run the command — background execution is handled automatically
+4. When build completes, tell Director the exact preview URL: https://${sandboxId}-{PORT}.e2b.dev
+
+### CURRENT SANDBOX STATE
+- **Files**: ${fileTree.length === 0 ? '(empty sandbox)' : fileTree.join(', ')}
+${fileTree.length === 0 ? '- **Note**: Fresh sandbox. No git repo initialized. No node_modules.' : ''}
+${executionHistory && executionHistory.length > 0 ? `\n### RECENT EXECUTION HISTORY\n${executionHistory.slice(-10).join('\n')}` : ''}
+`
+  return context.trim()
 }
 
 // ============================================
@@ -138,24 +168,6 @@ function validateJSON(raw: string): { valid: boolean; parsed?: unknown; error?: 
 }
 
 // ============================================
-// Context Builder
-// ============================================
-function buildContext(fileTree: string[], executionHistory?: string[]): string {
-  let context = `Current sandbox state:\n`
-  context += `Files: ${fileTree.length === 0 ? '(empty sandbox)' : fileTree.join(', ')}\n`
-  
-  if (fileTree.length === 0) {
-    context += `\nNote: Fresh sandbox. No git repo. No node_modules.`
-  }
-  
-  if (executionHistory && executionHistory.length > 0) {
-    context += `\nRecent execution history:\n${executionHistory.slice(-10).join('\n')}`
-  }
-  
-  return context
-}
-
-// ============================================
 // FIX PROMPTS
 // ============================================
 const ENGINEER_FIX_PROMPT = `You are the Engineering Lead (Claude Opus 4.5).
@@ -175,6 +187,7 @@ Rules:
 - Don't repeat the exact same command that failed — fix the root cause
 - If failureCategory is "architectural", set escalate: true
 - userFacingSummary should be calm and professional, not alarming
+- NEVER suggest localhost URLs — use the E2B preview URL pattern from the environment context
 
 Respond with JSON only:
 {
@@ -215,12 +228,15 @@ export async function orchestrate(
   claudeKey: string,
   geminiKey: string,
   directorIntent: string,
+  sandboxId: string,
   fileTree: string[],
   executionHistory?: string[]
 ): Promise<OrchestrationResult> {
   
   resetLoopDetection()
-  const context = buildContext(fileTree, executionHistory)
+  
+  // P0 HOTFIX: Inject environment context
+  const context = buildEnvironmentContext(sandboxId, fileTree, executionHistory)
 
   // PHASE 1: Architect intake
   const architectResponse = await callGemini(
@@ -324,6 +340,7 @@ export async function orchestrateFix(
   geminiKey: string,
   originalIntent: string,
   failedActions: { action: string; error: string }[],
+  sandboxId: string,
   fileTree: string[],
   attemptNumber: number,
   silentRetryCount: number = 0
@@ -355,7 +372,9 @@ export async function orchestrateFix(
   }
 
   const executionHistory = failedActions.map(f => `FAILED: ${f.action} → ${f.error}`)
-  const context = buildContext(fileTree, executionHistory)
+  
+  // P0 HOTFIX: Inject environment context
+  const context = buildEnvironmentContext(sandboxId, fileTree, executionHistory)
 
   // Engineer diagnoses
   const diagnosisPrompt = `

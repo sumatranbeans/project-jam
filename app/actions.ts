@@ -5,6 +5,45 @@ import { auth } from '@clerk/nextjs/server'
 import { getApiKeys } from '@/lib/vault'
 
 // ============================================
+// Server Command Detection
+// ============================================
+const SERVER_COMMAND_PATTERNS = [
+  /npm\s+run\s+dev/i,
+  /npm\s+start/i,
+  /yarn\s+dev/i,
+  /yarn\s+start/i,
+  /pnpm\s+dev/i,
+  /pnpm\s+start/i,
+  /npx\s+serve/i,
+  /npx\s+vite/i,
+  /python.*http\.server/i,
+  /python.*SimpleHTTPServer/i,
+  /node\s+server/i,
+  /next\s+dev/i,
+]
+
+function isServerCommand(command: string): boolean {
+  return SERVER_COMMAND_PATTERNS.some(pattern => pattern.test(command))
+}
+
+function detectPort(command: string): number {
+  // Check for explicit port in command
+  const portMatch = command.match(/(?:--port|--p|-p)\s*(\d+)/) || command.match(/(\d{4})/)
+  if (portMatch) {
+    const port = parseInt(portMatch[1])
+    if (port >= 1000 && port <= 65535) return port
+  }
+  
+  // Default ports by tool
+  if (command.includes('vite') || command.includes('npm run dev')) return 5173
+  if (command.includes('next')) return 3000
+  if (command.includes('serve')) return 3000
+  if (command.includes('http.server')) return 8000
+  
+  return 8080 // fallback
+}
+
+// ============================================
 // Sandbox Actions
 // ============================================
 export async function startSandboxAction() {
@@ -22,6 +61,19 @@ export async function listFilesAction(sandboxId: string, path: string = '.') {
   const sandbox = await Sandbox.connect(sandboxId, { apiKey: process.env.E2B_API_KEY })
   const files = await sandbox.files.list(path)
   return { files: files.map(f => f.name) }
+}
+
+// ============================================
+// File Read Action (for inline view/download)
+// ============================================
+export async function readFileAction(sandboxId: string, filePath: string) {
+  const sandbox = await Sandbox.connect(sandboxId, { apiKey: process.env.E2B_API_KEY })
+  try {
+    const content = await sandbox.files.read(filePath)
+    return { success: true, content }
+  } catch (error) {
+    return { success: false, error: String(error) }
+  }
 }
 
 // ============================================
@@ -90,7 +142,8 @@ export async function orchestrateAction(userIntent: string, sandboxId: string) {
   const files = await sandbox.files.list('.')
   const fileTree = files.map(f => f.name)
 
-  const result = await orchestrate(keys.anthropic, keys.google, userIntent, fileTree)
+  // Pass sandboxId for environment context injection
+  const result = await orchestrate(keys.anthropic, keys.google, userIntent, sandboxId, fileTree)
   return result
 }
 
@@ -114,11 +167,13 @@ export async function orchestrateFixAction(
   const files = await sandbox.files.list('.')
   const fileTree = files.map(f => f.name)
 
+  // Pass sandboxId for environment context injection
   const result = await orchestrateFix(
     keys.anthropic,
     keys.google,
     originalIntent,
     failedActions,
+    sandboxId,
     fileTree,
     attemptNumber,
     silentRetryCount
@@ -127,7 +182,7 @@ export async function orchestrateFixAction(
 }
 
 // ============================================
-// Execute Actions
+// Execute Actions (with background server support)
 // ============================================
 export async function executeActionsAction(
   sandboxId: string,
@@ -139,7 +194,7 @@ export async function executeActionsAction(
   const keys = await getApiKeys(userId)
   const sandbox = await Sandbox.connect(sandboxId, { apiKey: process.env.E2B_API_KEY })
   
-  const results: { action: string; success: boolean; output?: string }[] = []
+  const results: { action: string; success: boolean; output?: string; previewUrl?: string; port?: number }[] = []
 
   for (const action of actions) {
     try {
@@ -149,9 +204,31 @@ export async function executeActionsAction(
       }
       
       if (action.type === 'runCommand' && action.command) {
-        const result = await sandbox.commands.run(action.command)
-        const success = result.exitCode === 0
-        results.push({ action: action.command, success, output: result.stdout || result.stderr })
+        // Check if this is a server command that needs background execution
+        if (isServerCommand(action.command)) {
+          const port = detectPort(action.command)
+          const previewUrl = `https://${sandboxId}-${port}.e2b.dev`
+          
+          // Run in background with nohup, don't wait for it
+          const bgCommand = `nohup ${action.command} > /tmp/server.log 2>&1 &`
+          await sandbox.commands.run(bgCommand, { timeoutMs: 5000 })
+          
+          // Give server a moment to start
+          await new Promise(resolve => setTimeout(resolve, 2000))
+          
+          results.push({ 
+            action: action.command, 
+            success: true, 
+            output: `Server starting on port ${port}`,
+            previewUrl,
+            port
+          })
+        } else {
+          // Regular command - run synchronously
+          const result = await sandbox.commands.run(action.command, { timeoutMs: 60000 })
+          const success = result.exitCode === 0
+          results.push({ action: action.command, success, output: result.stdout || result.stderr })
+        }
       }
       
       if (action.type === 'createRepo' && action.name) {

@@ -13,7 +13,8 @@ import {
   executeActionsAction, 
   orchestrateFixAction,
   purgeDirectoryAction,
-  fullResetAction
+  fullResetAction,
+  readFileAction
 } from './actions'
 import { checkOnboardingAction } from './vault-actions'
 import { Zap, LogOut, Settings } from 'lucide-react'
@@ -100,24 +101,10 @@ export default function Home() {
     if (filesResult.files) setFileTree(filesResult.files)
   }
 
-  // Generate E2B preview URL
-  const getPreviewUrl = (sbId: string, port: number = 5173): string => {
-    return `https://${sbId}-${port}.e2b.dev`
-  }
-
-  // Detect if a command starts a dev server
-  const detectDevServer = (command: string, output: string): number | null => {
-    // Common dev server patterns
-    if (command.includes('npm run dev') || command.includes('yarn dev') || command.includes('pnpm dev')) {
-      // Vite default
-      if (output.includes('5173') || command.includes('vite')) return 5173
-      // Next.js default
-      if (output.includes('3000')) return 3000
-      // Generic
-      return 5173
-    }
-    return null
-  }
+  const handleReadFile = useCallback(async (path: string) => {
+    if (!sandboxId) return { success: false, error: 'No sandbox connected' }
+    return await readFileAction(sandboxId, path)
+  }, [sandboxId])
 
   const executeWithRetry = async (
     actions: { type: string; path?: string; content?: string; command?: string; name?: string; message?: string }[],
@@ -125,25 +112,17 @@ export default function Home() {
     originalIntent: string,
     attemptNumber: number = 1
   ): Promise<boolean> => {
-    
     addTerminalLine('system', attemptNumber === 1 ? 'Executing...' : `Retrying... (attempt ${attemptNumber})`)
-    
     const execResults = await executeActionsAction(sbId, actions)
-    
-    // Display results and detect dev server
     const failures: { action: string; error: string }[] = []
+    
     for (const result of execResults) {
       if (result.success) {
         addTerminalLine('stdout', `✓ ${result.action}`)
-        if (result.output) {
-          addTerminalLine('stdout', result.output)
-          // Check if this started a dev server
-          const port = detectDevServer(result.action, result.output)
-          if (port) {
-            const url = getPreviewUrl(sbId, port)
-            setPreviewUrl(url)
-            addTerminalLine('system', `Preview available at: ${url}`)
-          }
+        if (result.output) addTerminalLine('stdout', result.output)
+        if (result.previewUrl) {
+          setPreviewUrl(result.previewUrl)
+          addTerminalLine('system', `🌐 Preview: ${result.previewUrl}`)
         }
       } else {
         addTerminalLine('stderr', `✗ ${result.action}`)
@@ -154,46 +133,29 @@ export default function Home() {
 
     await refreshFileTree(sbId)
 
-    // All succeeded
     if (failures.length === 0) {
       addTerminalLine('system', '✓ All actions completed successfully')
       silentRetryCountRef.current = 0
-      
-      // Remove reflex indicator if present
       if (reflexMessageIdRef.current) {
         removeMessage(reflexMessageIdRef.current)
         reflexMessageIdRef.current = null
       }
-      
       return true
     }
 
-    // Max attempts reached
     if (attemptNumber >= MAX_FIX_ATTEMPTS) {
       addTerminalLine('stderr', `Max attempts (${MAX_FIX_ATTEMPTS}) reached`)
-      
-      // Remove reflex indicator
       if (reflexMessageIdRef.current) {
         removeMessage(reflexMessageIdRef.current)
         reflexMessageIdRef.current = null
       }
-      
       addMessage('gemini', 'Director, the team has hit a strategic impasse. Reviewing the failure logs is required for a creative pivot.')
       return false
     }
 
-    // Progressive Disclosure: Show reflex indicator (not raw diagnosis)
     setAgentStatus('claude-coding')
-    
-    const fixResult = await orchestrateFixAction(
-      originalIntent, 
-      failures, 
-      sbId, 
-      attemptNumber + 1,
-      silentRetryCountRef.current
-    )
+    const fixResult = await orchestrateFixAction(originalIntent, failures, sbId, attemptNumber + 1, silentRetryCountRef.current)
 
-    // Silent retry for transient errors (no UI update)
     if (fixResult.silentRetry) {
       silentRetryCountRef.current++
       addTerminalLine('system', `Transient error. Silent retry ${silentRetryCountRef.current}/${MAX_SILENT_RETRIES}...`)
@@ -201,7 +163,6 @@ export default function Home() {
       return executeWithRetry(actions, sbId, originalIntent, attemptNumber)
     }
 
-    // Show/update reflex indicator
     const reflexMessage = fixResult.userFacingSummary || 'Self-correcting...'
     if (reflexMessageIdRef.current) {
       updateMessage(reflexMessageIdRef.current, reflexMessage, { attemptNumber: attemptNumber + 1 })
@@ -209,45 +170,32 @@ export default function Home() {
       reflexMessageIdRef.current = addMessage('reflex', reflexMessage, { attemptNumber: attemptNumber + 1 })
     }
 
-    // Track issues resolved
-    if (fixResult.issuesResolved) {
-      issuesResolvedRef.current += fixResult.issuesResolved
-    }
+    if (fixResult.issuesResolved) issuesResolvedRef.current += fixResult.issuesResolved
 
-    // Escalate to Director
     if (fixResult.phase === 'escalate' || fixResult.requiresDirectorInput) {
-      // Remove reflex indicator
       if (reflexMessageIdRef.current) {
         removeMessage(reflexMessageIdRef.current)
         reflexMessageIdRef.current = null
       }
-      
-      if (fixResult.architectMessage) {
-        addMessage('gemini', fixResult.architectMessage)
-      } else {
-        addMessage('gemini', 'Director, the team has hit a strategic impasse. Reviewing the failure logs is required for a creative pivot.')
-      }
+      addMessage('gemini', fixResult.architectMessage || 'Director, the team has hit a strategic impasse.')
       return false
     }
 
-    // Handle reset strategy
     if (fixResult.resetStrategy === 'purge_directory' && fixResult.targetPath) {
       addTerminalLine('system', `Purging ${fixResult.targetPath}...`)
       await purgeDirectoryAction(sbId, fixResult.targetPath)
     } else if (fixResult.resetStrategy === 'full_reset') {
-      addTerminalLine('system', 'Full sandbox reset requested...')
+      addTerminalLine('system', 'Full sandbox reset...')
       const newSandbox = await fullResetAction()
       setSandboxId(newSandbox.sandboxId)
       sbId = newSandbox.sandboxId
       addTerminalLine('system', `New sandbox: ${sbId}`)
-      setPreviewUrl(undefined) // Reset preview URL
+      setPreviewUrl(undefined)
     }
 
-    // Execute the fix (no chat message for diagnosis - it's in terminal)
     if (fixResult.approved && fixResult.finalActions.length > 0) {
       return executeWithRetry(fixResult.finalActions, sbId, originalIntent, attemptNumber + 1)
     }
-
     return false
   }
 
@@ -274,10 +222,8 @@ export default function Home() {
     try {
       setAgentStatus('gemini-auditing')
       addTerminalLine('system', 'Product Architect analyzing...')
-      
       const result = await orchestrateAction(message, currentSandboxId)
       
-      // Clarification
       if (result.phase === 'clarification' && result.architectMessage) {
         addMessage('gemini', result.architectMessage)
         setAgentStatus('idle')
@@ -285,47 +231,36 @@ export default function Home() {
         return
       }
       
-      // Show Architect's blueprint
-      if (result.architectMessage) {
-        addMessage('gemini', result.architectMessage)
-      }
-
-      // Show Engineer's plan
+      if (result.architectMessage) addMessage('gemini', result.architectMessage)
       if (result.builderPlan) {
         setAgentStatus('claude-coding')
         addTerminalLine('system', 'Engineering Lead building...')
         addMessage('claude', result.builderPlan.response)
       }
-      
-      // Show Architect's review
       if (result.architectReview) {
         setAgentStatus('gemini-auditing')
         addMessage('gemini', result.architectReview.reasoning, { approved: result.approved })
       }
 
-      // Execute with self-correction
       if (result.approved && result.finalActions.length > 0) {
         setAgentStatus('executing')
         const success = await executeWithRetry(result.finalActions, currentSandboxId, message)
-        
         if (success) {
-          // Professional wrap-up message
           if (issuesResolvedRef.current > 0) {
             addMessage('claude', `Build finalized. Auto-resolved ${issuesResolvedRef.current} environment ${issuesResolvedRef.current === 1 ? 'issue' : 'issues'}.`)
           }
           addMessage('system', '✓ Build complete!')
+          if (previewUrl) addMessage('system', `Preview available: ${previewUrl}`)
         }
       } else if (!result.approved) {
         addTerminalLine('system', 'Plan not approved by Product Architect')
       }
-
       setAgentStatus('idle')
     } catch (error) {
       addTerminalLine('stderr', 'Error: ' + error)
       addMessage('system', 'Something went wrong. Check terminal.')
       setAgentStatus('idle')
     }
-
     setIsProcessing(false)
   }
 
@@ -353,42 +288,20 @@ export default function Home() {
               <Settings className="w-4 h-4" />
             </button>
             <SignOutButton>
-              <button className="p-2 hover:bg-gray-100 rounded-lg" title="Sign out">
-                <LogOut className="w-4 h-4" />
-              </button>
+              <button className="p-2 hover:bg-gray-100 rounded-lg" title="Sign out"><LogOut className="w-4 h-4" /></button>
             </SignOutButton>
           </div>
         </div>
       </header>
       <div className="flex flex-1 overflow-hidden">
         <div className="w-[70%] border-r border-jam-border overflow-hidden">
-          <BrainPanel 
-            messages={messages} 
-            status={
-              agentStatus === 'idle' ? 'Ready' : 
-              agentStatus === 'claude-coding' ? 'Engineering Lead working...' : 
-              agentStatus === 'gemini-auditing' ? 'Product Architect reviewing...' : 
-              agentStatus === 'executing' ? 'Executing...' : 
-              'Processing...'
-            } 
-          />
+          <BrainPanel messages={messages} status={agentStatus === 'idle' ? 'Ready' : agentStatus === 'claude-coding' ? 'Engineering Lead working...' : agentStatus === 'gemini-auditing' ? 'Product Architect reviewing...' : agentStatus === 'executing' ? 'Executing...' : 'Processing...'} />
         </div>
         <div className="w-[30%] overflow-hidden">
-          <OutputPanel 
-            lines={terminalLines} 
-            sandboxStatus={sandboxStatus} 
-            fileTree={fileTree}
-            previewUrl={previewUrl}
-          />
+          <OutputPanel lines={terminalLines} sandboxStatus={sandboxStatus} fileTree={fileTree} previewUrl={previewUrl} sandboxId={sandboxId || undefined} onReadFile={handleReadFile} />
         </div>
       </div>
-      <CommandBar 
-        onSubmit={handleUserMessage} 
-        onCancel={handleCancel}
-        disabled={isProcessing} 
-        isProcessing={isProcessing} 
-        placeholder={sandboxId ? 'Describe what you want to build...' : 'Type to connect and start building...'} 
-      />
+      <CommandBar onSubmit={handleUserMessage} onCancel={handleCancel} disabled={isProcessing} isProcessing={isProcessing} placeholder={sandboxId ? 'Describe what you want to build...' : 'Type to connect and start building...'} />
     </main>
   )
 }
