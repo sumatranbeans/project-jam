@@ -79,6 +79,12 @@ function MessageBubble({ message }: { message: Message }) {
 
   const label = isUser ? 'You' : isClaude ? 'Builder' : 'Supervisor'
   const maxWidth = isUser ? 'max-w-full' : 'max-w-[85%]'
+  
+  const timestamp = message.timestamp.toLocaleTimeString('en-US', { 
+    hour: '2-digit', 
+    minute: '2-digit', 
+    second: '2-digit' 
+  })
 
   return (
     <div className={`flex ${alignment}`}>
@@ -86,6 +92,7 @@ function MessageBubble({ message }: { message: Message }) {
         <div className="flex items-center gap-2 mb-1">
           {icon}
           <span className="text-xs font-medium opacity-70">{label}</span>
+          <span className="text-xs opacity-50">{timestamp}</span>
           {message.approved !== undefined && (
             <span className={`text-xs px-2 py-0.5 rounded-full ${message.approved ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
               {message.approved ? 'Approved' : 'Vetoed'}
