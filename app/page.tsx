@@ -21,6 +21,16 @@ export default function Home() {
   const [fileTree, setFileTree] = useState<string[]>([])
   const [isProcessing, setIsProcessing] = useState(false)
   const [checkingOnboarding, setCheckingOnboarding] = useState(true)
+  const [abortController, setAbortController] = useState<AbortController | null>(null)
+  const handleCancel = () => {
+    if (abortController) {
+      abortController.abort()
+      setAbortController(null)
+    }
+    setIsProcessing(false)
+    setAgentStatus('idle')
+    addTerminalLine('system', '⚠️ Operation cancelled by user')
+  }
 
   useEffect(() => {
     if (isLoaded && user) { checkOnboarding() }
@@ -172,7 +182,13 @@ export default function Home() {
           <OutputPanel lines={terminalLines} sandboxStatus={sandboxStatus} fileTree={fileTree} />
         </div>
       </div>
-      <CommandBar onSubmit={handleUserMessage} disabled={isProcessing} placeholder={sandboxId ? 'Describe what you want to build...' : 'Type to connect sandbox and start building...'} />
+      <CommandBar 
+        onSubmit={handleUserMessage} 
+        onCancel={handleCancel}
+        disabled={isProcessing} 
+        isProcessing={isProcessing} 
+        placeholder={sandboxId ? 'Describe what you want to build...' : 'Type to connect sandbox and start building...'} 
+      />
     </main>
   )
 }
