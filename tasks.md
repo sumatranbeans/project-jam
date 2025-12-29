@@ -1,74 +1,135 @@
 # 🎼 Project Jam: Active Task Ledger
 
-**Last Updated:** 2025-12-29 07:45 UTC
-**Current Status:** 🔄 Refactoring Orchestrator for Smart Handoff
+**Last Updated:** 2025-12-29 09:45 UTC  
+**Current Status:** 🔄 Wave 2 - Dynamic Self-Correction Implementation
 
 ---
 
-## 🔄 IN PROGRESS
+## 🔄 ACTIVE IMPLEMENTATION
 
-| Task | Status | Notes |
-|------|--------|-------|
-| Architect-First Protocol | 🔄 Active | Refactoring orchestrator |
-| Terminology Audit | 🔄 Active | "user" → "Director" |
-| Smart Token Usage | 🔄 Active | Eliminate mechanical redundancy |
+| Task | Status | Owner | Notes |
+|------|--------|-------|-------|
+| `orchestrateFix()` with Safety Triggers | 🔄 Active | Claude | Architect-approved spec |
+| `sanitizeError()` function | ✅ Done | Claude | Strip timestamps, addresses, UUIDs |
+| `isTransientError()` function | ✅ Done | Claude | Silent retry on network blips |
+| Dependency Sentinel | ✅ Done | Claude | Force review on package.json changes |
+| Error signature loop detection | ✅ Done | Claude | Sanitized hash comparison |
+| Reset strategy (continue/purge/full_reset) | ✅ Done | Claude | With Key Vault re-verification |
+| `executeWithRetry()` loop | ✅ Done | Claude | Max 3 attempts, silent retry for transient |
 
 ---
 
-## ✅ COMPLETED (Wave 2)
+## ✅ COMPLETED (Wave 2 - MVO)
 
 | Task | Date | Notes |
 |------|------|-------|
-| Claude API Integration | 2025-12-29 | Claude Opus 4.5 |
-| Gemini API Integration | 2025-12-29 | Gemini 3 Pro |
-| Orchestrator v1 | 2025-12-29 | Basic handshake working |
-| UI: Role badges | 2025-12-29 | Director, Architect, Engineer |
-| UI: Timestamps | 2025-12-29 | Added to message bubbles |
-| UI: Cancel/Stop | 2025-12-29 | Abort functionality |
-| UI: Panel alignment | 2025-12-29 | h-12 headers |
-| Official model icons | 2025-12-29 | Claude + Gemini logos |
+| MVO Prompts (minimal, trust-based) | 2025-12-29 | Handshake-only constraints |
+| Architect-First Flow | 2025-12-29 | Gemini speaks first |
+| Basic orchestrator | 2025-12-29 | Director → Architect → Engineer → Execute |
+| Claude API Integration | 2025-12-29 | Opus 4.5 (`claude-opus-4-5-20251101`) |
+| Gemini API Integration | 2025-12-29 | Gemini 3 Pro (`gemini-3-pro-preview`) |
+| UI: Role badges, timestamps, icons | 2025-12-29 | Director terminology |
+| WhatsApp-style chat bubbles | 2025-12-29 | 70/30 panel split |
 
 ---
 
-## 📋 QUEUED
+## ✅ COMPLETED (Wave 1 - Foundation)
 
-| Task | Priority | Notes |
-|------|----------|-------|
-| Retry after veto | P1 | Auto-retry with corrections |
-| GitHub auto-commit | P1 | Commit on approval |
-| Loop detection | P2 | Halt on repeated errors |
-| Debate mode UI | P3 | Visualize disagreements |
+| Task | Date | Notes |
+|------|------|-------|
+| Next.js 15 on Vercel | 2025-12-27 | App Router |
+| E2B Sandbox Integration | 2025-12-27 | Live terminal streaming |
+| Clerk Auth | 2025-12-27 | User management |
+| Upstash Key Vault | 2025-12-28 | AES-256 encrypted |
+| GitHub OAuth | 2025-12-28 | Token stored in vault |
+| Onboarding Flow | 2025-12-28 | API key collection |
+| Settings Page | 2025-12-28 | Key management UI |
 
 ---
 
-## 📝 SESSION LOG
+## 📋 QUEUED (Wave 3+)
 
-### 2025-12-29 Session 3
-- **07:45** — Received Architect directive for "Architect-First" protocol
-- **07:30** — Fixed panel alignment, added model icons
-- **07:15** — Added timestamps, cancel button
-- **07:00** — Wave 2 orchestrator working (basic flow)
+| Task | Priority | Owner | Notes |
+|------|----------|-------|-------|
+| Session burn counter UI | P2 | TBD | Passive cost visibility |
+| Session allowance settings | P2 | TBD | Budget per task |
+| Program Manager (Haiku) | P3 | TBD | Cost estimation |
+| MLOps Engineer (Flash) | P3 | TBD | Adversarial testing |
+| Live Preview panel | P2 | TBD | Vite dev server in iframe |
+| Debate Mode UI | P3 | TBD | Visualize disagreements |
+| Auto-commit snapshots | P2 | TBD | Green state checkpoints |
 
 ---
 
 ## 🏛️ ARCHITECTURE REFERENCE
 
-**Interaction Flow (Architect-First Protocol):**
+### Self-Correction Flow
 ```
-Director (You)
-    ↓ Intent
-Product Architect (Gemini 3 Pro)
-    ↓ Clarify / Spec
-Engineering Lead (Claude Opus 4.5)
-    ↓ Build (only after validated spec)
-Product Architect (Gemini 3 Pro)
-    ↓ Review (only if substantive)
-E2B Sandbox
-    ↓ Execute
+Execute Actions
+     ↓
+┌─── SUCCESS ─────────────────────────────────┐
+│ ✓ Build Complete                            │
+└─────────────────────────────────────────────┘
+     ↓
+┌─── FAILURE ─────────────────────────────────┐
+│                                             │
+│  Is it transient? (network, 500s)           │
+│     YES → Silent retry (up to 2x)           │
+│     NO  ↓                                   │
+│                                             │
+│  Engineer diagnoses:                        │
+│    - failureCategory                        │
+│    - resetStrategy                          │
+│    - proposed fix actions                   │
+│                                             │
+│  Dependency Sentinel check:                 │
+│    - Does fix modify package.json?          │
+│      YES → Force Architect review           │
+│                                             │
+│  Architect reviews fix                      │
+│                                             │
+│  Sanitize errors, compute signature         │
+│                                             │
+│  Same signature as last attempt?            │
+│     YES → STAGNATION → Escalate to Director │
+│     NO  → Execute fix                       │
+│                                             │
+└─────────────────────────────────────────────┘
 ```
 
-**Key Rules:**
-1. Architect is primary intake — Engineer waits
-2. Non-actionable input → Architect handles, Engineer stays IDLE
-3. "User" terminology deprecated → Use "Director"
-4. 95% approval threshold — no nitpick blocking
+### Safety Triggers
+
+| # | Trigger | Purpose |
+|---|---------|---------|
+| 1 | Reset Strategy | Re-verify Key Vault on `full_reset` |
+| 2 | Dependency Sentinel | Force Architect review on package changes |
+| 3 | Error Sanitization | Strip timestamps/addresses before loop detection |
+| 4 | Silent Retry | Auto-retry transient network errors (2x max) |
+
+### Failure Categories
+
+| Category | Examples | Handling |
+|----------|----------|----------|
+| `plumbing` | git init, npm install, permissions | Engineer fixes autonomously |
+| `logic` | Syntax error, runtime error, types | Engineer fixes, Architect reviews |
+| `architectural` | Wrong framework, misunderstood intent | Immediate escalation to Architect |
+
+---
+
+## 🎯 SUCCESS CRITERIA (Wave 2)
+
+- [ ] "Build a counter app" completes with self-healing on git/npm failures
+- [ ] Stagnation detection triggers on same error twice
+- [ ] Dependency changes trigger Architect review
+- [ ] Transient errors get silent retry
+- [ ] Max 3 attempts before escalating to Director
+
+---
+
+## 📝 LESSONS LEARNED
+
+1. **Frontier models don't need micro-management** — they need clear orchestration protocols
+2. **Over-prescriptive prompts reduce emergent intelligence** — trust the models
+3. **System layer should handle validation** — not model responsibility
+4. **Progress over price** — stop on stagnation, not cost
+5. **Error sanitization is critical** — timestamps cause false "progress" detection

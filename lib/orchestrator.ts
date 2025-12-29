@@ -1,6 +1,9 @@
 import { callClaude, BUILDER_SYSTEM_PROMPT } from './claude'
 import { callGemini, ARCHITECT_INTAKE_PROMPT, ARCHITECT_REVIEW_PROMPT } from './gemini'
 
+// ============================================
+// TYPES
+// ============================================
 export type ActionType = 'createFile' | 'runCommand' | 'createRepo' | 'commit'
 
 export type Action = {
@@ -14,7 +17,7 @@ export type Action = {
 
 export type BuilderResponse = {
   actions: Action[]
-  requestReview: boolean
+  requestReview?: boolean
   response: string
 }
 
@@ -25,31 +28,103 @@ export type ArchitectReview = {
 }
 
 export type OrchestrationResult = {
-  phase: 'clarification' | 'building' | 'review' | 'complete' | 'loop_detected'
+  phase: 'clarification' | 'building' | 'complete' | 'escalate'
   architectMessage?: string
   builderPlan?: BuilderResponse
   architectReview?: ArchitectReview
   approved: boolean
   finalActions: Action[]
   error?: string
+  requiresDirectorInput?: boolean
+  silentRetry?: boolean
+  resetStrategy?: string
+  targetPath?: string
 }
 
-// Loop detection: track file states
-const recentFileStates: string[] = []
+// ============================================
+// SAFETY TRIGGER #3: Error Sanitization
+// ============================================
+function sanitizeError(error: string): string {
+  return error
+    .replace(/\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(\.\d+)?Z?/g, '[TIMESTAMP]')
+    .replace(/\b\d{10,13}\b/g, '[UNIX_TS]')
+    .replace(/0x[a-fA-F0-9]+/g, '[ADDR]')
+    .replace(/[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}/gi, '[UUID]')
+    .replace(/:\d+:\d+/g, ':[LINE]')
+    .replace(/\/tmp\/[^\s]+/g, '[TMP_PATH]')
+    .replace(/sandbox[_-]?[a-z0-9]+/gi, '[SANDBOX]')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
 
-function detectLoop(fileTree: string[]): boolean {
-  const currentState = JSON.stringify(fileTree.sort())
-  if (recentFileStates.length >= 2) {
-    const lastTwo = recentFileStates.slice(-2)
-    if (lastTwo[0] === currentState && lastTwo[1] === currentState) {
-      return true // Same state twice in a row
-    }
+// ============================================
+// SAFETY TRIGGER #4: Transient Error Detection
+// ============================================
+const TRANSIENT_ERROR_PATTERNS = [
+  /ETIMEDOUT/i,
+  /ECONNRESET/i,
+  /ENOTFOUND/i,
+  /ECONNREFUSED/i,
+  /socket hang up/i,
+  /network error/i,
+  /503\b/,
+  /504\b/,
+  /500\b/,
+  /502\b/,
+  /getaddrinfo/i,
+  /EAI_AGAIN/i,
+]
+
+function isTransientError(error: string): boolean {
+  return TRANSIENT_ERROR_PATTERNS.some(pattern => pattern.test(error))
+}
+
+// ============================================
+// SAFETY TRIGGER #2: Dependency Sentinel
+// ============================================
+function modifiesDependencies(actions: Action[]): boolean {
+  return actions.some(a => 
+    a.path?.includes('package.json') ||
+    a.path?.includes('package-lock.json') ||
+    a.path?.includes('yarn.lock') ||
+    a.command?.match(/npm\s+(install|uninstall|i|un|add|remove|r)\s/i) ||
+    a.command?.match(/yarn\s+(add|remove)\s/i) ||
+    a.command?.match(/pnpm\s+(add|remove)\s/i)
+  )
+}
+
+// ============================================
+// Loop Detection
+// ============================================
+let previousErrorSignature: string | null = null
+
+function computeErrorSignature(errors: string[]): string {
+  const sanitized = errors.map(sanitizeError).sort().join('|')
+  let hash = 0
+  for (let i = 0; i < sanitized.length; i++) {
+    const char = sanitized.charCodeAt(i)
+    hash = ((hash << 5) - hash) + char
+    hash = hash & hash
   }
-  recentFileStates.push(currentState)
-  if (recentFileStates.length > 5) recentFileStates.shift()
+  return hash.toString(16)
+}
+
+function detectStagnation(errors: string[]): boolean {
+  const signature = computeErrorSignature(errors)
+  if (signature === previousErrorSignature) {
+    return true
+  }
+  previousErrorSignature = signature
   return false
 }
 
+export function resetLoopDetection(): void {
+  previousErrorSignature = null
+}
+
+// ============================================
+// JSON Validation
+// ============================================
 function validateJSON(raw: string): { valid: boolean; parsed?: unknown; error?: string } {
   try {
     const cleaned = raw.replace(/```json\n?|\n?```/g, '').trim()
@@ -60,33 +135,87 @@ function validateJSON(raw: string): { valid: boolean; parsed?: unknown; error?: 
   }
 }
 
-function buildContext(fileTree: string[], tasksContent?: string): string {
-  let context = `File tree:\n${fileTree.map(f => `- ${f}`).join('\n')}`
-  if (tasksContent) {
-    context += `\n\nActive Ledger (tasks.md):\n${tasksContent}`
+// ============================================
+// Context Builder
+// ============================================
+function buildContext(fileTree: string[], executionHistory?: string[]): string {
+  let context = `Current sandbox state:\n`
+  context += `Files: ${fileTree.length === 0 ? '(empty sandbox)' : fileTree.join(', ')}\n`
+  
+  if (fileTree.length === 0) {
+    context += `\nNote: Fresh sandbox. No git repo. No node_modules.`
   }
+  
+  if (executionHistory && executionHistory.length > 0) {
+    context += `\nRecent execution history:\n${executionHistory.slice(-10).join('\n')}`
+  }
+  
   return context
 }
 
+// ============================================
+// FIX PROMPTS
+// ============================================
+const ENGINEER_FIX_PROMPT = `You are the Engineering Lead (Claude Opus 4.5).
+
+Some actions failed. Diagnose and fix.
+
+Your response MUST include:
+1. diagnosis: What went wrong and why
+2. failureCategory: "plumbing" (environment/setup), "logic" (code errors), or "architectural" (blueprint was fundamentally wrong)
+3. resetStrategy: "continue" (proceed with current state), "purge_directory" (clean specific path), or "full_reset" (need fresh sandbox)
+4. actions: The fix actions
+
+Rules:
+- If git commands failed, you likely need "git init" first
+- If npm failed, check you're in the right directory
+- Don't repeat the exact same command that failed — fix the root cause
+- If failureCategory is "architectural", set escalate: true
+
+Respond with JSON only:
+{
+  "diagnosis": "...",
+  "failureCategory": "plumbing|logic|architectural",
+  "resetStrategy": "continue|purge_directory|full_reset",
+  "targetPath": "path/to/purge (if purging)",
+  "actions": [{ "type": "...", ... }],
+  "escalate": false,
+  "response": "summary"
+}`
+
+const ARCHITECT_FIX_REVIEW_PROMPT = `You are the Product Architect (Gemini 3 Pro).
+
+The Engineering Lead proposed a fix for failed actions. Review it.
+
+Rules:
+- If failureCategory is "architectural", reject and prepare to re-blueprint
+- If the fix modifies dependencies (package.json, npm install new packages), scrutinize carefully — this may be scope creep
+- If the fix looks reasonable for the failure type, approve
+- If you see the same error pattern repeating, escalate to Director
+
+Respond with JSON only:
+{
+  "assessment": "your analysis",
+  "approve_retry": true,
+  "needs_reblueprint": false,
+  "escalate_to_director": false,
+  "dependency_concern": "",
+  "message": "..."
+}`
+
+// ============================================
+// MAIN ORCHESTRATION
+// ============================================
 export async function orchestrate(
   claudeKey: string,
   geminiKey: string,
   directorIntent: string,
   fileTree: string[],
-  tasksContent?: string
+  executionHistory?: string[]
 ): Promise<OrchestrationResult> {
   
-  // Loop detection
-  if (detectLoop(fileTree)) {
-    return {
-      phase: 'loop_detected',
-      approved: false,
-      finalActions: [],
-      error: 'Loop detected: file state unchanged after multiple exchanges. Escalating to Director.'
-    }
-  }
-
-  const context = buildContext(fileTree, tasksContent)
+  resetLoopDetection()
+  const context = buildContext(fileTree, executionHistory)
 
   // PHASE 1: Architect intake
   const architectResponse = await callGemini(
@@ -96,23 +225,21 @@ export async function orchestrate(
     context
   )
 
-  // Check if Architect is handing off or clarifying
-  const lowerResponse = architectResponse.toLowerCase()
-  const isHandoff = lowerResponse.includes('hand off') || 
-                    lowerResponse.includes('handoff') || 
-                    lowerResponse.includes('engineering lead') ||
-                    lowerResponse.includes('blueprint') ||
-                    lowerResponse.includes('build') ||
-                    lowerResponse.includes('implement') ||
-                    lowerResponse.includes('create')
+  // Detect if clarification vs handoff
+  const lower = architectResponse.toLowerCase()
+  const isHandoff = lower.includes('engineering lead') ||
+                    lower.includes('blueprint') ||
+                    lower.includes('execute') ||
+                    lower.includes('implement') ||
+                    lower.includes('build') ||
+                    lower.includes('create')
   
-  const isClarification = lowerResponse.includes('what would you like') ||
-                          lowerResponse.includes('could you clarify') ||
-                          lowerResponse.includes('can you tell me more') ||
-                          lowerResponse.includes('?')
+  const isClarification = (lower.includes('what would you like') ||
+                          lower.includes('could you clarify') ||
+                          lower.includes('what are we building') ||
+                          lower.match(/\?[\s]*$/)) && !isHandoff
 
-  // If clarification needed, stop here
-  if (isClarification && !isHandoff) {
+  if (isClarification) {
     return {
       phase: 'clarification',
       architectMessage: architectResponse,
@@ -131,7 +258,6 @@ export async function orchestrate(
     context
   )
 
-  // Validate JSON from builder
   const builderValidation = validateJSON(builderRaw)
   if (!builderValidation.valid) {
     return {
@@ -145,57 +271,200 @@ export async function orchestrate(
 
   const builderPlan = builderValidation.parsed as BuilderResponse
 
-  // PHASE 3: Check if review needed
-  const hasHighRiskActions = builderPlan.actions?.some(a => 
-    a.type === 'commit' || 
-    a.command?.includes('rm ') || 
-    a.command?.includes('delete')
-  )
-  
-  const needsReview = builderPlan.requestReview || hasHighRiskActions || (builderPlan.actions?.length > 0)
+  // PHASE 3: Architect reviews
+  if (builderPlan.actions && builderPlan.actions.length > 0) {
+    const reviewPrompt = `Director's intent: "${directorIntent}"\n\nEngineering Lead's plan:\n${JSON.stringify(builderPlan, null, 2)}`
+    
+    const reviewRaw = await callGemini(
+      geminiKey,
+      ARCHITECT_REVIEW_PROMPT,
+      reviewPrompt,
+      context
+    )
 
-  if (!needsReview) {
+    const reviewValidation = validateJSON(reviewRaw)
+    let architectReview: ArchitectReview
+    
+    if (!reviewValidation.valid) {
+      const approved = reviewRaw.toLowerCase().includes('approv')
+      architectReview = { approved, reasoning: reviewRaw, concerns: [] }
+    } else {
+      architectReview = reviewValidation.parsed as ArchitectReview
+    }
+
     return {
       phase: 'complete',
       architectMessage: architectResponse,
       builderPlan,
-      approved: true,
-      finalActions: builderPlan.actions || []
+      architectReview,
+      approved: architectReview.approved,
+      finalActions: architectReview.approved ? builderPlan.actions : []
     }
   }
 
-  // PHASE 4: Architect reviews
-  const reviewPrompt = `Director's intent: "${directorIntent}"\n\nEngineering Lead's plan:\n${JSON.stringify(builderPlan, null, 2)}`
-  
-  const reviewRaw = await callGemini(
-    geminiKey,
-    ARCHITECT_REVIEW_PROMPT,
-    reviewPrompt,
-    context
-  )
-
-  const reviewValidation = validateJSON(reviewRaw)
-  let architectReview: ArchitectReview
-  
-  if (!reviewValidation.valid) {
-    // If review JSON fails, check for approval keywords
-    const approved = reviewRaw.toLowerCase().includes('approv')
-    architectReview = {
-      approved,
-      reasoning: reviewRaw,
-      concerns: []
-    }
-  } else {
-    architectReview = reviewValidation.parsed as ArchitectReview
-  }
-
-  // APPROVAL GATE: Only execute if approved
   return {
     phase: 'complete',
     architectMessage: architectResponse,
     builderPlan,
-    architectReview,
-    approved: architectReview.approved,
-    finalActions: architectReview.approved ? (builderPlan.actions || []) : []
+    approved: true,
+    finalActions: []
+  }
+}
+
+// ============================================
+// FIX ORCHESTRATION (Self-Correction)
+// ============================================
+export async function orchestrateFix(
+  claudeKey: string,
+  geminiKey: string,
+  originalIntent: string,
+  failedActions: { action: string; error: string }[],
+  fileTree: string[],
+  attemptNumber: number,
+  silentRetryCount: number = 0
+): Promise<OrchestrationResult> {
+  
+  // SAFETY TRIGGER #4: Silent retry for transient errors
+  const allTransient = failedActions.every(f => isTransientError(f.error))
+  if (allTransient && silentRetryCount < 2) {
+    return {
+      phase: 'complete',
+      approved: true,
+      finalActions: failedActions.map(f => ({ type: 'runCommand' as ActionType, command: f.action })),
+      silentRetry: true
+    }
+  }
+
+  // SAFETY TRIGGER #3: Stagnation detection
+  const errorMessages = failedActions.map(f => f.error)
+  if (detectStagnation(errorMessages)) {
+    return {
+      phase: 'escalate',
+      approved: false,
+      finalActions: [],
+      error: 'Stagnation detected: Same errors after retry. Team needs Director input.',
+      requiresDirectorInput: true
+    }
+  }
+
+  const executionHistory = failedActions.map(f => `FAILED: ${f.action} → ${f.error}`)
+  const context = buildContext(fileTree, executionHistory)
+
+  // Engineer diagnoses
+  const diagnosisPrompt = `
+Original Director intent: "${originalIntent}"
+
+These actions FAILED (attempt #${attemptNumber}):
+${failedActions.map(f => `- ${f.action}\n  Error: ${f.error}`).join('\n')}
+
+Diagnose and provide a fix.`
+
+  const engineerFixRaw = await callClaude(claudeKey, ENGINEER_FIX_PROMPT, diagnosisPrompt, context)
+  
+  const fixValidation = validateJSON(engineerFixRaw)
+  if (!fixValidation.valid) {
+    return {
+      phase: 'escalate',
+      approved: false,
+      finalActions: [],
+      error: 'Engineer could not produce valid fix plan'
+    }
+  }
+
+  const fixPlan = fixValidation.parsed as {
+    diagnosis: string
+    failureCategory: 'plumbing' | 'logic' | 'architectural'
+    resetStrategy: 'continue' | 'purge_directory' | 'full_reset'
+    targetPath?: string
+    actions: Action[]
+    escalate?: boolean
+    response: string
+  }
+
+  // Architectural failure = immediate escalate
+  if (fixPlan.failureCategory === 'architectural' || fixPlan.escalate) {
+    return {
+      phase: 'escalate',
+      architectMessage: fixPlan.diagnosis,
+      approved: false,
+      finalActions: [],
+      error: 'Architectural failure: Blueprint needs revision',
+      requiresDirectorInput: true
+    }
+  }
+
+  // SAFETY TRIGGER #2: Dependency Sentinel
+  const hasDependencyChanges = modifiesDependencies(fixPlan.actions || [])
+  
+  // Architect reviews fix
+  const reviewPrompt = `
+Original intent: "${originalIntent}"
+Attempt #${attemptNumber}
+Failure category: ${fixPlan.failureCategory}
+
+Failed actions:
+${failedActions.map(f => `- ${f.action}: ${f.error}`).join('\n')}
+
+Engineer's diagnosis: ${fixPlan.diagnosis}
+Engineer's reset strategy: ${fixPlan.resetStrategy}
+Engineer's proposed fix: ${JSON.stringify(fixPlan.actions, null, 2)}
+
+${hasDependencyChanges ? '⚠️ DEPENDENCY SENTINEL: This fix modifies package.json or installs new packages. Scrutinize carefully.' : ''}
+`
+
+  const architectReviewRaw = await callGemini(geminiKey, ARCHITECT_FIX_REVIEW_PROMPT, reviewPrompt, context)
+  
+  const reviewValidation = validateJSON(architectReviewRaw)
+  
+  let approveRetry = true
+  let escalateToDirector = false
+  let needsReblueprint = false
+  let architectMessage = ''
+
+  if (reviewValidation.valid) {
+    const review = reviewValidation.parsed as {
+      assessment: string
+      approve_retry: boolean
+      needs_reblueprint: boolean
+      escalate_to_director: boolean
+      dependency_concern?: string
+      message: string
+    }
+    approveRetry = review.approve_retry
+    escalateToDirector = review.escalate_to_director
+    needsReblueprint = review.needs_reblueprint
+    architectMessage = review.message || review.assessment
+  }
+
+  if (escalateToDirector || needsReblueprint) {
+    return {
+      phase: 'escalate',
+      architectMessage,
+      builderPlan: { actions: fixPlan.actions, response: fixPlan.response },
+      approved: false,
+      finalActions: [],
+      error: needsReblueprint ? 'Architect requests re-blueprint' : 'Escalated to Director',
+      requiresDirectorInput: true
+    }
+  }
+
+  if (!approveRetry) {
+    return {
+      phase: 'escalate',
+      architectMessage: 'Architect did not approve the fix',
+      approved: false,
+      finalActions: [],
+      error: architectMessage
+    }
+  }
+
+  return {
+    phase: 'complete',
+    architectMessage: fixPlan.diagnosis,
+    builderPlan: { actions: fixPlan.actions, response: fixPlan.response },
+    approved: true,
+    finalActions: fixPlan.actions || [],
+    resetStrategy: fixPlan.resetStrategy,
+    targetPath: fixPlan.targetPath
   }
 }
