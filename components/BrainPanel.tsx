@@ -23,52 +23,49 @@ const ClaudeIcon = ({ size = 14 }: { size?: number }) => (
   </svg>
 )
 
-// Google Gemini sparkle icon (2025 version - 4-point star)
+// Google Gemini sparkle icon (official 4-point star with gradient)
 const GeminiIcon = ({ size = 14 }: { size?: number }) => (
-  <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 28 28" fill="none">
-    <path d="M14 0C14 0 16.5 11.5 14 14C11.5 16.5 0 14 0 14C0 14 11.5 11.5 14 14C16.5 16.5 14 28 14 28C14 28 11.5 16.5 14 14C16.5 11.5 28 14 28 14C28 14 16.5 16.5 14 14C11.5 11.5 14 0 14 0Z" fill="url(#gemini_grad)"/>
+  <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 24 24">
     <defs>
-      <linearGradient id="gemini_grad" x1="0" y1="0" x2="28" y2="28" gradientUnits="userSpaceOnUse">
-        <stop stopColor="#1A73E8"/>
-        <stop offset="0.5" stopColor="#6C47FF"/>
-        <stop offset="1" stopColor="#E8453C"/>
+      <linearGradient id="geminiGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+        <stop offset="0%" stopColor="#1A73E8"/>
+        <stop offset="50%" stopColor="#8E63CF"/>
+        <stop offset="100%" stopColor="#D93025"/>
       </linearGradient>
     </defs>
+    <path fill="url(#geminiGrad)" d="M12 0C12 6.627 6.627 12 0 12c6.627 0 12 5.373 12 12 0-6.627 5.373-12 12-12-6.627 0-12-5.373-12-12z"/>
   </svg>
-)
-
-// Human/Director icon
-const DirectorIcon = ({ size = 14 }: { size?: number }) => (
-  <User className="text-gray-600" style={{ width: size, height: size }} />
 )
 
 export function BrainPanel({ messages, status }: BrainPanelProps) {
   return (
     <div className="flex flex-col h-full bg-white">
-      {/* Header with role badges - Order: Director, Product Architect, Engineering Lead */}
-      <div className="flex items-center justify-between px-4 py-2 border-b border-gray-200">
-        <div className="flex items-center gap-2">
-          <Brain className="w-4 h-4 text-amber-500" />
-          <span className="font-medium text-sm text-gray-900">Workspace</span>
-        </div>
-        <div className="flex items-center gap-2">
+      {/* Header row - matches OutputPanel height */}
+      <div className="flex items-center gap-2 px-4 h-12 border-b border-gray-200">
+        <Brain className="w-4 h-4 text-amber-500" />
+        <span className="font-medium text-sm text-gray-900">Workspace</span>
+        
+        {/* Role badges */}
+        <div className="flex items-center gap-2 ml-4">
           {/* You (Director) */}
-          <div className="flex items-center gap-1.5 px-2 py-1 bg-gray-100 rounded-full border border-gray-200">
-            <DirectorIcon size={12} />
-            <span className="text-gray-700 text-xs font-medium">You</span>
-            <span className="text-gray-400 text-[10px]">Director</span>
+          <div className="flex items-center gap-1.5 h-7 px-2.5 bg-gray-100 rounded-full border border-gray-200">
+            <User className="w-3 h-3 text-gray-600" />
+            <span className="text-xs font-medium text-gray-700">You</span>
+            <span className="text-[10px] text-gray-400">Director</span>
           </div>
+          
           {/* Product Architect (Gemini) */}
-          <div className="flex items-center gap-1.5 px-2 py-1 bg-blue-50 rounded-full border border-blue-200">
+          <div className="flex items-center gap-1.5 h-7 px-2.5 bg-blue-50 rounded-full border border-blue-200">
             <GeminiIcon size={12} />
-            <span className="text-blue-800 text-xs font-medium">Product Architect</span>
-            <span className="text-blue-500 text-[10px]">Gemini 3 Pro</span>
+            <span className="text-xs font-medium text-blue-800">Product Architect</span>
+            <span className="text-[10px] text-blue-500">Gemini 3 Pro</span>
           </div>
+          
           {/* Engineering Lead (Claude) */}
-          <div className="flex items-center gap-1.5 px-2 py-1 bg-amber-50 rounded-full border border-amber-200">
+          <div className="flex items-center gap-1.5 h-7 px-2.5 bg-amber-50 rounded-full border border-amber-200">
             <ClaudeIcon size={12} />
-            <span className="text-amber-800 text-xs font-medium">Engineering Lead</span>
-            <span className="text-amber-500 text-[10px]">Claude Opus 4.5</span>
+            <span className="text-xs font-medium text-amber-800">Engineering Lead</span>
+            <span className="text-[10px] text-amber-500">Claude Opus 4.5</span>
           </div>
         </div>
       </div>
@@ -106,12 +103,6 @@ function MessageBubble({ message }: { message: Message }) {
     : isClaude 
     ? 'bg-amber-50 text-amber-900 border border-amber-100' 
     : 'bg-blue-50 text-blue-900 border border-blue-100'
-  
-  const icon = isUser 
-    ? <DirectorIcon size={14} /> 
-    : isClaude 
-    ? <ClaudeIcon size={14} /> 
-    : <GeminiIcon size={14} />
 
   const label = isUser ? 'You' : isClaude ? 'Engineering Lead' : 'Product Architect'
   const modelName = isClaude ? 'Claude Opus 4.5' : isGemini ? 'Gemini 3 Pro' : 'Director'
@@ -127,7 +118,9 @@ function MessageBubble({ message }: { message: Message }) {
     <div className={`flex ${alignment}`}>
       <div className={`${maxWidth} ${bgColor} rounded-xl px-3 py-2`}>
         <div className="flex items-center gap-1.5 mb-1">
-          {icon}
+          {isUser && <User className="w-3 h-3 text-gray-600" />}
+          {isClaude && <ClaudeIcon size={12} />}
+          {isGemini && <GeminiIcon size={12} />}
           <span className="text-[11px] font-medium">{label}</span>
           <span className="text-[9px] opacity-50">({modelName})</span>
           <span className="text-[9px] opacity-30 ml-auto">{timestamp}</span>
