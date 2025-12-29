@@ -142,6 +142,3 @@ export async function executeActionsAction(
 
   return results
 }
-```
-
-Save. Say "next" when done.
