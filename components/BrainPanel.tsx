@@ -1,6 +1,6 @@
 'use client'
 
-import { Brain, User, Bot, Shield } from 'lucide-react'
+import { Brain, User } from 'lucide-react'
 
 export type Message = {
   id: string
@@ -16,6 +16,20 @@ type BrainPanelProps = {
   status: string
 }
 
+const ClaudeIcon = () => (
+  <svg width="16" height="16" viewBox="0 0 256 256" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <path d="M128 0C57.308 0 0 57.308 0 128s57.308 128 128 128 128-57.308 128-128S198.692 0 128 0z" fill="#D4A574"/>
+    <path d="M128 32c-52.935 0-96 43.065-96 96s43.065 96 96 96 96-43.065 96-96-43.065-96-96-96zm0 160c-35.29 0-64-28.71-64-64s28.71-64 64-64 64 28.71 64 64-28.71 64-64 64z" fill="#C4956A"/>
+  </svg>
+)
+
+const GeminiIcon = () => (
+  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <path d="M12 2L2 7l10 5 10-5-10-5z" fill="#4285F4"/>
+    <path d="M2 17l10 5 10-5M2 12l10 5 10-5" stroke="#4285F4" strokeWidth="2" fill="none"/>
+  </svg>
+)
+
 export function BrainPanel({ messages, status }: BrainPanelProps) {
   return (
     <div className="flex flex-col h-full bg-white">
@@ -26,13 +40,15 @@ export function BrainPanel({ messages, status }: BrainPanelProps) {
           <span className="font-semibold text-gray-900">Workspace</span>
         </div>
         <div className="flex items-center gap-4 text-xs">
-          <div className="flex items-center gap-1 text-amber-600">
-            <Bot className="w-3 h-3" />
-            <span>Builder (Claude)</span>
+          <div className="flex items-center gap-1.5 px-2 py-1 bg-amber-50 rounded-full border border-amber-200">
+            <ClaudeIcon />
+            <span className="text-amber-800 font-medium">Engineering Lead</span>
+            <span className="text-amber-600 opacity-75">Claude Opus 4.5</span>
           </div>
-          <div className="flex items-center gap-1 text-blue-600">
-            <Shield className="w-3 h-3" />
-            <span>Supervisor (Gemini)</span>
+          <div className="flex items-center gap-1.5 px-2 py-1 bg-blue-50 rounded-full border border-blue-200">
+            <GeminiIcon />
+            <span className="text-blue-800 font-medium">Product Architect</span>
+            <span className="text-blue-600 opacity-75">Gemini 3 Pro</span>
           </div>
         </div>
       </div>
@@ -74,10 +90,11 @@ function MessageBubble({ message }: { message: Message }) {
   const icon = isUser 
     ? <User className="w-4 h-4" /> 
     : isClaude 
-    ? <Bot className="w-4 h-4 text-amber-500" /> 
-    : <Shield className="w-4 h-4 text-blue-500" />
+    ? <ClaudeIcon /> 
+    : <GeminiIcon />
 
-  const label = isUser ? 'You' : isClaude ? 'Builder' : 'Supervisor'
+  const label = isUser ? 'You' : isClaude ? 'Engineering Lead' : 'Product Architect'
+  const modelName = isClaude ? 'Claude Opus 4.5' : isGemini ? 'Gemini 3 Pro' : ''
   const maxWidth = isUser ? 'max-w-full' : 'max-w-[85%]'
   
   const timestamp = message.timestamp.toLocaleTimeString('en-US', { 
@@ -92,7 +109,8 @@ function MessageBubble({ message }: { message: Message }) {
         <div className="flex items-center gap-2 mb-1">
           {icon}
           <span className="text-xs font-medium opacity-70">{label}</span>
-          <span className="text-xs opacity-50">{timestamp}</span>
+          {modelName && <span className="text-xs opacity-50">({modelName})</span>}
+          <span className="text-xs opacity-40">{timestamp}</span>
           {message.approved !== undefined && (
             <span className={`text-xs px-2 py-0.5 rounded-full ${message.approved ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
               {message.approved ? 'Approved' : 'Vetoed'}
