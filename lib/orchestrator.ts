@@ -39,6 +39,8 @@ export type OrchestrationResult = {
   silentRetry?: boolean
   resetStrategy?: string
   targetPath?: string
+  userFacingSummary?: string  // Progressive Disclosure: Director-facing message
+  issuesResolved?: number     // Count of auto-resolved issues
 }
 
 // ============================================
@@ -161,20 +163,23 @@ const ENGINEER_FIX_PROMPT = `You are the Engineering Lead (Claude Opus 4.5).
 Some actions failed. Diagnose and fix.
 
 Your response MUST include:
-1. diagnosis: What went wrong and why
-2. failureCategory: "plumbing" (environment/setup), "logic" (code errors), or "architectural" (blueprint was fundamentally wrong)
-3. resetStrategy: "continue" (proceed with current state), "purge_directory" (clean specific path), or "full_reset" (need fresh sandbox)
-4. actions: The fix actions
+1. diagnosis: What went wrong and why (technical, for logs)
+2. userFacingSummary: A brief, professional summary for the Director (e.g., "Adjusting project structure" or "Configuring build environment") - NO technical jargon
+3. failureCategory: "plumbing" (environment/setup), "logic" (code errors), or "architectural" (blueprint was fundamentally wrong)
+4. resetStrategy: "continue" (proceed with current state), "purge_directory" (clean specific path), or "full_reset" (need fresh sandbox)
+5. actions: The fix actions
 
 Rules:
 - If git commands failed, you likely need "git init" first
 - If npm failed, check you're in the right directory
 - Don't repeat the exact same command that failed — fix the root cause
 - If failureCategory is "architectural", set escalate: true
+- userFacingSummary should be calm and professional, not alarming
 
 Respond with JSON only:
 {
-  "diagnosis": "...",
+  "diagnosis": "technical details for logs",
+  "userFacingSummary": "brief Director-facing status",
   "failureCategory": "plumbing|logic|architectural",
   "resetStrategy": "continue|purge_directory|full_reset",
   "targetPath": "path/to/purge (if purging)",
@@ -331,7 +336,8 @@ export async function orchestrateFix(
       phase: 'complete',
       approved: true,
       finalActions: failedActions.map(f => ({ type: 'runCommand' as ActionType, command: f.action })),
-      silentRetry: true
+      silentRetry: true,
+      userFacingSummary: 'Retrying connection...'
     }
   }
 
@@ -342,8 +348,9 @@ export async function orchestrateFix(
       phase: 'escalate',
       approved: false,
       finalActions: [],
-      error: 'Stagnation detected: Same errors after retry. Team needs Director input.',
-      requiresDirectorInput: true
+      error: 'The team has hit a strategic impasse. Reviewing the failure logs is required for a creative pivot.',
+      requiresDirectorInput: true,
+      userFacingSummary: 'Strategic review needed'
     }
   }
 
@@ -367,12 +374,14 @@ Diagnose and provide a fix.`
       phase: 'escalate',
       approved: false,
       finalActions: [],
-      error: 'Engineer could not produce valid fix plan'
+      error: 'Engineer could not produce valid fix plan',
+      userFacingSummary: 'Technical review needed'
     }
   }
 
   const fixPlan = fixValidation.parsed as {
     diagnosis: string
+    userFacingSummary?: string
     failureCategory: 'plumbing' | 'logic' | 'architectural'
     resetStrategy: 'continue' | 'purge_directory' | 'full_reset'
     targetPath?: string
@@ -385,11 +394,12 @@ Diagnose and provide a fix.`
   if (fixPlan.failureCategory === 'architectural' || fixPlan.escalate) {
     return {
       phase: 'escalate',
-      architectMessage: fixPlan.diagnosis,
+      architectMessage: 'The team has identified a fundamental approach issue that requires Director input.',
       approved: false,
       finalActions: [],
-      error: 'Architectural failure: Blueprint needs revision',
-      requiresDirectorInput: true
+      error: 'Architectural revision needed',
+      requiresDirectorInput: true,
+      userFacingSummary: fixPlan.userFacingSummary || 'Approach review needed'
     }
   }
 
@@ -439,12 +449,13 @@ ${hasDependencyChanges ? '⚠️ DEPENDENCY SENTINEL: This fix modifies package.
   if (escalateToDirector || needsReblueprint) {
     return {
       phase: 'escalate',
-      architectMessage,
+      architectMessage: 'Director, the team has hit a strategic impasse. Reviewing the failure logs is required for a creative pivot.',
       builderPlan: { actions: fixPlan.actions, response: fixPlan.response },
       approved: false,
       finalActions: [],
       error: needsReblueprint ? 'Architect requests re-blueprint' : 'Escalated to Director',
-      requiresDirectorInput: true
+      requiresDirectorInput: true,
+      userFacingSummary: 'Strategic review needed'
     }
   }
 
@@ -454,17 +465,18 @@ ${hasDependencyChanges ? '⚠️ DEPENDENCY SENTINEL: This fix modifies package.
       architectMessage: 'Architect did not approve the fix',
       approved: false,
       finalActions: [],
-      error: architectMessage
+      error: architectMessage,
+      userFacingSummary: 'Fix approach rejected'
     }
   }
 
   return {
     phase: 'complete',
-    architectMessage: fixPlan.diagnosis,
-    builderPlan: { actions: fixPlan.actions, response: fixPlan.response },
     approved: true,
     finalActions: fixPlan.actions || [],
     resetStrategy: fixPlan.resetStrategy,
-    targetPath: fixPlan.targetPath
+    targetPath: fixPlan.targetPath,
+    userFacingSummary: fixPlan.userFacingSummary || 'Adjusting configuration...',
+    issuesResolved: failedActions.length
   }
 }

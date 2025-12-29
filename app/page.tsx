@@ -32,8 +32,11 @@ export default function Home() {
   const [fileTree, setFileTree] = useState<string[]>([])
   const [isProcessing, setIsProcessing] = useState(false)
   const [checkingOnboarding, setCheckingOnboarding] = useState(true)
+  const [previewUrl, setPreviewUrl] = useState<string | undefined>(undefined)
   const currentIntentRef = useRef<string>('')
   const silentRetryCountRef = useRef<number>(0)
+  const issuesResolvedRef = useRef<number>(0)
+  const reflexMessageIdRef = useRef<string | null>(null)
 
   const handleCancel = () => {
     setIsProcessing(false)
@@ -56,8 +59,18 @@ export default function Home() {
     }
   }
 
-  const addMessage = useCallback((role: Message['role'], content: string, extra?: { thinking?: string; approved?: boolean }) => {
-    setMessages(prev => [...prev, { id: crypto.randomUUID(), role, content, timestamp: new Date(), ...extra }])
+  const addMessage = useCallback((role: Message['role'], content: string, extra?: { thinking?: string; approved?: boolean; attemptNumber?: number }) => {
+    const id = crypto.randomUUID()
+    setMessages(prev => [...prev, { id, role, content, timestamp: new Date(), ...extra }])
+    return id
+  }, [])
+
+  const removeMessage = useCallback((id: string) => {
+    setMessages(prev => prev.filter(m => m.id !== id))
+  }, [])
+
+  const updateMessage = useCallback((id: string, content: string, extra?: { attemptNumber?: number }) => {
+    setMessages(prev => prev.map(m => m.id === id ? { ...m, content, ...extra } : m))
   }, [])
 
   const addTerminalLine = useCallback((type: TerminalLine['type'], content: string) => {
@@ -87,6 +100,25 @@ export default function Home() {
     if (filesResult.files) setFileTree(filesResult.files)
   }
 
+  // Generate E2B preview URL
+  const getPreviewUrl = (sbId: string, port: number = 5173): string => {
+    return `https://${sbId}-${port}.e2b.dev`
+  }
+
+  // Detect if a command starts a dev server
+  const detectDevServer = (command: string, output: string): number | null => {
+    // Common dev server patterns
+    if (command.includes('npm run dev') || command.includes('yarn dev') || command.includes('pnpm dev')) {
+      // Vite default
+      if (output.includes('5173') || command.includes('vite')) return 5173
+      // Next.js default
+      if (output.includes('3000')) return 3000
+      // Generic
+      return 5173
+    }
+    return null
+  }
+
   const executeWithRetry = async (
     actions: { type: string; path?: string; content?: string; command?: string; name?: string; message?: string }[],
     sbId: string,
@@ -98,12 +130,21 @@ export default function Home() {
     
     const execResults = await executeActionsAction(sbId, actions)
     
-    // Display results
+    // Display results and detect dev server
     const failures: { action: string; error: string }[] = []
     for (const result of execResults) {
       if (result.success) {
         addTerminalLine('stdout', `✓ ${result.action}`)
-        if (result.output) addTerminalLine('stdout', result.output)
+        if (result.output) {
+          addTerminalLine('stdout', result.output)
+          // Check if this started a dev server
+          const port = detectDevServer(result.action, result.output)
+          if (port) {
+            const url = getPreviewUrl(sbId, port)
+            setPreviewUrl(url)
+            addTerminalLine('system', `Preview available at: ${url}`)
+          }
+        }
       } else {
         addTerminalLine('stderr', `✗ ${result.action}`)
         if (result.output) addTerminalLine('stderr', result.output)
@@ -117,18 +158,31 @@ export default function Home() {
     if (failures.length === 0) {
       addTerminalLine('system', '✓ All actions completed successfully')
       silentRetryCountRef.current = 0
+      
+      // Remove reflex indicator if present
+      if (reflexMessageIdRef.current) {
+        removeMessage(reflexMessageIdRef.current)
+        reflexMessageIdRef.current = null
+      }
+      
       return true
     }
 
     // Max attempts reached
     if (attemptNumber >= MAX_FIX_ATTEMPTS) {
       addTerminalLine('stderr', `Max attempts (${MAX_FIX_ATTEMPTS}) reached`)
-      addMessage('system', `Build incomplete after ${MAX_FIX_ATTEMPTS} attempts. Please review errors and provide guidance.`)
+      
+      // Remove reflex indicator
+      if (reflexMessageIdRef.current) {
+        removeMessage(reflexMessageIdRef.current)
+        reflexMessageIdRef.current = null
+      }
+      
+      addMessage('gemini', 'Director, the team has hit a strategic impasse. Reviewing the failure logs is required for a creative pivot.')
       return false
     }
 
-    // Let the team fix it
-    addTerminalLine('system', 'Failures detected. Team diagnosing...')
+    // Progressive Disclosure: Show reflex indicator (not raw diagnosis)
     setAgentStatus('claude-coding')
     
     const fixResult = await orchestrateFixAction(
@@ -139,20 +193,40 @@ export default function Home() {
       silentRetryCountRef.current
     )
 
-    // Silent retry for transient errors
+    // Silent retry for transient errors (no UI update)
     if (fixResult.silentRetry) {
       silentRetryCountRef.current++
-      addTerminalLine('system', `Transient error detected. Silent retry ${silentRetryCountRef.current}/${MAX_SILENT_RETRIES}...`)
+      addTerminalLine('system', `Transient error. Silent retry ${silentRetryCountRef.current}/${MAX_SILENT_RETRIES}...`)
       await new Promise(r => setTimeout(r, 2000))
       return executeWithRetry(actions, sbId, originalIntent, attemptNumber)
     }
 
+    // Show/update reflex indicator
+    const reflexMessage = fixResult.userFacingSummary || 'Self-correcting...'
+    if (reflexMessageIdRef.current) {
+      updateMessage(reflexMessageIdRef.current, reflexMessage, { attemptNumber: attemptNumber + 1 })
+    } else {
+      reflexMessageIdRef.current = addMessage('reflex', reflexMessage, { attemptNumber: attemptNumber + 1 })
+    }
+
+    // Track issues resolved
+    if (fixResult.issuesResolved) {
+      issuesResolvedRef.current += fixResult.issuesResolved
+    }
+
     // Escalate to Director
     if (fixResult.phase === 'escalate' || fixResult.requiresDirectorInput) {
+      // Remove reflex indicator
+      if (reflexMessageIdRef.current) {
+        removeMessage(reflexMessageIdRef.current)
+        reflexMessageIdRef.current = null
+      }
+      
       if (fixResult.architectMessage) {
         addMessage('gemini', fixResult.architectMessage)
+      } else {
+        addMessage('gemini', 'Director, the team has hit a strategic impasse. Reviewing the failure logs is required for a creative pivot.')
       }
-      addMessage('system', fixResult.error || 'Team needs Director guidance to proceed.')
       return false
     }
 
@@ -166,17 +240,10 @@ export default function Home() {
       setSandboxId(newSandbox.sandboxId)
       sbId = newSandbox.sandboxId
       addTerminalLine('system', `New sandbox: ${sbId}`)
+      setPreviewUrl(undefined) // Reset preview URL
     }
 
-    // Show fix plan
-    if (fixResult.architectMessage) {
-      addMessage('claude', fixResult.architectMessage)
-    }
-    if (fixResult.builderPlan?.response) {
-      addMessage('claude', fixResult.builderPlan.response)
-    }
-
-    // Execute the fix
+    // Execute the fix (no chat message for diagnosis - it's in terminal)
     if (fixResult.approved && fixResult.finalActions.length > 0) {
       return executeWithRetry(fixResult.finalActions, sbId, originalIntent, attemptNumber + 1)
     }
@@ -189,6 +256,8 @@ export default function Home() {
     addMessage('user', message)
     currentIntentRef.current = message
     silentRetryCountRef.current = 0
+    issuesResolvedRef.current = 0
+    reflexMessageIdRef.current = null
     
     let currentSandboxId = sandboxId
     if (!currentSandboxId) {
@@ -240,6 +309,10 @@ export default function Home() {
         const success = await executeWithRetry(result.finalActions, currentSandboxId, message)
         
         if (success) {
+          // Professional wrap-up message
+          if (issuesResolvedRef.current > 0) {
+            addMessage('claude', `Build finalized. Auto-resolved ${issuesResolvedRef.current} environment ${issuesResolvedRef.current === 1 ? 'issue' : 'issues'}.`)
+          }
           addMessage('system', '✓ Build complete!')
         }
       } else if (!result.approved) {
@@ -301,7 +374,12 @@ export default function Home() {
           />
         </div>
         <div className="w-[30%] overflow-hidden">
-          <OutputPanel lines={terminalLines} sandboxStatus={sandboxStatus} fileTree={fileTree} />
+          <OutputPanel 
+            lines={terminalLines} 
+            sandboxStatus={sandboxStatus} 
+            fileTree={fileTree}
+            previewUrl={previewUrl}
+          />
         </div>
       </div>
       <CommandBar 

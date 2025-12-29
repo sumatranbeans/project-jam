@@ -1,14 +1,15 @@
 'use client'
 
-import { Brain, User } from 'lucide-react'
+import { Brain, User, Wrench } from 'lucide-react'
 
 export type Message = {
   id: string
-  role: 'user' | 'claude' | 'gemini' | 'system'
+  role: 'user' | 'claude' | 'gemini' | 'system' | 'reflex'
   content: string
   timestamp: Date
   thinking?: string
   approved?: boolean
+  attemptNumber?: number
 }
 
 type BrainPanelProps = {
@@ -84,9 +85,35 @@ export function BrainPanel({ messages, status }: BrainPanelProps) {
           </div>
         ) : (
           messages.map((message) => (
-            <MessageBubble key={message.id} message={message} />
+            message.role === 'reflex' 
+              ? <ReflexIndicator key={message.id} message={message} />
+              : <MessageBubble key={message.id} message={message} />
           ))
         )}
+      </div>
+    </div>
+  )
+}
+
+// Reflex State Indicator - non-chat bubble, shows self-correction in progress
+function ReflexIndicator({ message }: { message: Message }) {
+  return (
+    <div className="flex justify-start">
+      <div className="flex items-center gap-2 px-3 py-2 bg-amber-50 border border-amber-200 rounded-lg">
+        <div className="flex items-center justify-center w-5 h-5 bg-amber-100 rounded-full animate-pulse">
+          <Wrench className="w-3 h-3 text-amber-600" />
+        </div>
+        <div className="flex items-center gap-2">
+          <ClaudeIcon size={12} />
+          <span className="text-xs font-medium text-amber-800">
+            🔧 {message.content}
+          </span>
+          {message.attemptNumber && (
+            <span className="text-[10px] text-amber-500 bg-amber-100 px-1.5 py-0.5 rounded-full">
+              Attempt {message.attemptNumber}
+            </span>
+          )}
+        </div>
       </div>
     </div>
   )
@@ -96,16 +123,20 @@ function MessageBubble({ message }: { message: Message }) {
   const isUser = message.role === 'user'
   const isClaude = message.role === 'claude'
   const isGemini = message.role === 'gemini'
+  const isSystem = message.role === 'system'
 
   const alignment = isUser ? 'justify-center' : isClaude ? 'justify-start' : 'justify-end'
+  
   const bgColor = isUser 
     ? 'bg-gray-100 text-gray-900' 
     : isClaude 
     ? 'bg-amber-50 text-amber-900 border border-amber-100' 
+    : isSystem
+    ? 'bg-green-50 text-green-900 border border-green-200'
     : 'bg-blue-50 text-blue-900 border border-blue-100'
 
-  const label = isUser ? 'You' : isClaude ? 'Engineering Lead' : 'Product Architect'
-  const modelName = isClaude ? 'Claude Opus 4.5' : isGemini ? 'Gemini 3 Pro' : 'Director'
+  const label = isUser ? 'You' : isClaude ? 'Engineering Lead' : isSystem ? 'System' : 'Product Architect'
+  const modelName = isClaude ? 'Claude Opus 4.5' : isGemini ? 'Gemini 3 Pro' : isSystem ? '' : 'Director'
   const maxWidth = isUser ? 'max-w-full' : 'max-w-[80%]'
   
   const timestamp = message.timestamp.toLocaleTimeString('en-US', { 
@@ -121,8 +152,9 @@ function MessageBubble({ message }: { message: Message }) {
           {isUser && <User className="w-3 h-3 text-gray-600" />}
           {isClaude && <ClaudeIcon size={12} />}
           {isGemini && <GeminiIcon size={12} />}
+          {isSystem && <Brain className="w-3 h-3 text-green-600" />}
           <span className="text-[11px] font-medium">{label}</span>
-          <span className="text-[9px] opacity-50">({modelName})</span>
+          {modelName && <span className="text-[9px] opacity-50">({modelName})</span>}
           <span className="text-[9px] opacity-30 ml-auto">{timestamp}</span>
           {message.approved !== undefined && (
             <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ml-1 ${message.approved ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
