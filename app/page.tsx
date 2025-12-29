@@ -6,7 +6,7 @@ import { BrainPanel, type Message } from '@/components/BrainPanel'
 import { OutputPanel, type TerminalLine } from '@/components/OutputPanel'
 import { CommandBar } from '@/components/CommandBar'
 import { StatusIndicator, type AgentStatus } from '@/components/StatusIndicator'
-import { startSandboxAction, runCommandAction, listFilesAction } from './actions'
+import { startSandboxAction, listFilesAction, orchestrateAction, executeActionsAction } from './actions'
 import { checkOnboardingAction } from './vault-actions'
 import { Zap, LogOut, Settings } from 'lucide-react'
 
@@ -37,8 +37,8 @@ export default function Home() {
     }
   }
 
-  const addMessage = useCallback((role: Message['role'], content: string) => {
-    setMessages((prev) => [...prev, { id: crypto.randomUUID(), role, content, timestamp: new Date() }])
+  const addMessage = useCallback((role: Message['role'], content: string, extra?: { thinking?: string; approved?: boolean }) => {
+    setMessages((prev) => [...prev, { id: crypto.randomUUID(), role, content, timestamp: new Date(), ...extra }])
   }, [])
 
   const addTerminalLine = useCallback((type: TerminalLine['type'], content: string) => {
@@ -74,25 +74,62 @@ export default function Home() {
     }
     
     if (currentSandboxId === null) {
+      addMessage('system', 'Failed to connect to sandbox')
       setIsProcessing(false)
       return
     }
-    
-    setAgentStatus('claude-coding')
-    addMessage('claude', 'I will help you with: "' + message + '"\n\nLet me set up the environment...')
-    
-    addTerminalLine('command', 'echo "Sandbox is ready!" && node --version && npm --version')
+
     try {
-      const result = await runCommandAction(currentSandboxId, 'echo "Sandbox is ready!" && node --version && npm --version')
-      if (result.stdout) result.stdout.split('\n').forEach((line) => { if (line.trim()) addTerminalLine('stdout', line) })
-      if (result.stderr) result.stderr.split('\n').forEach((line) => { if (line.trim()) addTerminalLine('stderr', line) })
+      // Builder phase
+      setAgentStatus('claude-coding')
+      addTerminalLine('system', 'Builder (Claude) analyzing intent...')
+      
+      const result = await orchestrateAction(message, currentSandboxId)
+      
+      // Show Builder's plan
+      addMessage('claude', result.builderPlan.response, { thinking: result.builderPlan.thinking })
+      
+      // Supervisor phase
+      setAgentStatus('gemini-auditing')
+      addTerminalLine('system', 'Supervisor (Gemini) reviewing plan...')
+      
+      // Show Supervisor's review
+      addMessage('gemini', result.supervisorReview.reasoning, { approved: result.supervisorReview.approved })
+      
+      if (result.supervisorReview.concerns?.length > 0) {
+        addTerminalLine('system', 'Concerns: ' + result.supervisorReview.concerns.join(', '))
+      }
+
+      // Execute if approved
+      if (result.approved && result.finalActions.length > 0) {
+        setAgentStatus('executing')
+        addTerminalLine('system', 'Executing approved actions...')
+        
+        const execResults = await executeActionsAction(currentSandboxId, result.finalActions)
+        
+        for (const execResult of execResults) {
+          if (execResult.success) {
+            addTerminalLine('stdout', `✓ ${execResult.action}`)
+            if (execResult.output) addTerminalLine('stdout', execResult.output)
+          } else {
+            addTerminalLine('stderr', `✗ ${execResult.action}: ${execResult.output}`)
+          }
+        }
+        
+        // Refresh file tree
+        const filesResult = await listFilesAction(currentSandboxId)
+        if (filesResult.files) setFileTree(filesResult.files)
+      } else if (!result.approved) {
+        addTerminalLine('stderr', 'Plan vetoed by Supervisor: ' + result.supervisorReview.corrections)
+      }
+
+      setAgentStatus('complete')
     } catch (error) {
-      addTerminalLine('stderr', 'Command failed: ' + error)
+      addTerminalLine('stderr', 'Orchestration failed: ' + error)
+      addMessage('system', 'Something went wrong. Check the terminal for details.')
+      setAgentStatus('idle')
     }
-    
-    setAgentStatus('gemini-auditing')
-    addMessage('gemini', 'I have reviewed the setup. The sandbox environment is configured correctly with Node.js and npm available. Ready to proceed.')
-    setAgentStatus('complete')
+
     setIsProcessing(false)
   }
 
@@ -128,10 +165,10 @@ export default function Home() {
         </div>
       </header>
       <div className="flex flex-1 overflow-hidden">
-        <div className="w-1/2 border-r border-jam-border overflow-hidden">
-          <BrainPanel messages={messages} status={agentStatus === 'idle' ? 'Waiting for input' : agentStatus === 'claude-coding' ? 'Claude is thinking...' : agentStatus === 'gemini-auditing' ? 'Gemini is reviewing...' : 'Processing...'} />
+        <div className="w-[70%] border-r border-jam-border overflow-hidden">
+          <BrainPanel messages={messages} status={agentStatus === 'idle' ? 'Waiting for input' : agentStatus === 'claude-coding' ? 'Builder is thinking...' : agentStatus === 'gemini-auditing' ? 'Supervisor is reviewing...' : agentStatus === 'executing' ? 'Executing actions...' : 'Processing...'} />
         </div>
-        <div className="w-1/2 overflow-hidden">
+        <div className="w-[30%] overflow-hidden">
           <OutputPanel lines={terminalLines} sandboxStatus={sandboxStatus} fileTree={fileTree} />
         </div>
       </div>
