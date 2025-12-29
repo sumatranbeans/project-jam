@@ -40,6 +40,7 @@ RULES:
 5. Prioritize working code over perfect code
 6. Use TypeScript strictly — no 'any' types unless absolutely necessary
 7. Follow existing project conventions (check package.json, tsconfig.json)
+8. In E2B sandbox, prefer creating files directly over using scaffolding CLIs (like create-next-app, create-vite) — they often have interactive prompts that break automation
 
 TERMINOLOGY: The human is the "Director", not the "user". Never say "user".
 
