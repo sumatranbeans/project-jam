@@ -7,7 +7,7 @@ export async function callGemini(
   context?: string
 ): Promise<string> {
   const genAI = new GoogleGenerativeAI(apiKey)
-  const model = genAI.getGenerativeModel({ model: 'gemini-2.5-pro-preview-06-05' })
+  const model = genAI.getGenerativeModel({ model: 'gemini-3-pro-preview' })
 
   const fullPrompt = context 
     ? `${systemPrompt}\n\nProject context:\n${context}\n\nUser request:\n${userMessage}`
