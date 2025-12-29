@@ -55,10 +55,11 @@ ${previousErrors?.length ? `Previous errors to avoid:\n${previousErrors.join('\n
     context
   )
 
-  let builderPlan: BuilderResponse
-  try {
-    builderPlan = JSON.parse(builderRaw)
-  } catch {
+let builderPlan: BuilderResponse
+try {
+  const cleaned = builderRaw.replace(/```json\n?|\n?```/g, '').trim()
+  builderPlan = JSON.parse(cleaned)
+} catch {
     builderPlan = {
       thinking: 'Failed to parse response',
       actions: [],
