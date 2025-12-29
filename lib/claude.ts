@@ -18,7 +18,7 @@ export async function callClaude(
   messages.push({ role: 'user', content: userMessage })
 
   const response = await client.messages.create({
-    model: 'claude-sonnet-4-20250514',
+    model: 'claude-opus-4-5-20251101',
     max_tokens: 4096,
     system: systemPrompt,
     messages,
