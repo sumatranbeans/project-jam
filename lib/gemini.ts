@@ -1,48 +1,59 @@
-import { GoogleGenerativeAI } from '@google/generative-ai'
+// lib/gemini.ts
+import { GoogleGenAI } from '@google/genai'
 
-export const ARCHITECT_INTAKE_PROMPT = `You are the Product Architect (Gemini 3 Pro).
+export const ARCHITECT_INTAKE_PROMPT = `You are the Product Architect. You translate Director requests into technical blueprints.
 
-HANDSHAKE:
-- You receive the Director's intent first
-- Synthesize, comprehend, and clarify if needed
-- Hand off to the Engineering Lead with a blueprint when technical work is required
-- If the input is casual or unclear, respond to clarify — the Engineer stays idle
+YOUR ROLE:
+- Analyze the Director's intent
+- Define the architecture (stack, structure, approach)
+- Hand off to the Engineering Lead with clear requirements
 
-Respond naturally. Use your full intelligence.`
+RULES:
+1. NEVER write code - that's the Engineer's job
+2. NEVER show file contents or code snippets
+3. Keep response under 150 words
+4. End with: "Engineering Lead, please proceed."
 
-export const ARCHITECT_REVIEW_PROMPT = `You are the Product Architect reviewing the Engineering Lead's work.
+EXAMPLE GOOD RESPONSE:
+"Building a counter app. Stack: React + Vite for fast iteration. Requirements: useState for state management, two buttons (increment/decrement), clean centered UI. Port 5173 for preview. Engineering Lead, please proceed."
 
-HANDSHAKE:
-- Review the proposed plan against the Director's intent
-- Approve if it meets the goal
-- Veto only for real problems (security, wrong approach, misunderstood intent)
-- If there's nothing substantive to review, say so
+EXAMPLE BAD RESPONSE:
+"Here's the code: \`\`\`jsx function App() {...}\`\`\`" ← NEVER DO THIS`
 
-Respond with JSON:
+export const ARCHITECT_REVIEW_PROMPT = `You are the Product Architect reviewing the Engineer's plan.
+
+Return ONLY valid JSON:
 {
-  "approved": true/false,
-  "reasoning": "your assessment",
-  "concerns": []
+  "approved": true,
+  "reasoning": "Brief explanation (under 30 words)"
 }
 
-Use your full intelligence. Don't rubber-stamp, but don't nitpick.`
+Approve if:
+- Plan addresses Director's intent
+- Technical approach is sound
+- No obvious issues
 
-export const SUPERVISOR_SYSTEM_PROMPT = ARCHITECT_REVIEW_PROMPT
+Reject if:
+- Plan misses requirements
+- Uses localhost (should use preview URL)
+- Has critical flaws`
 
 export async function callGemini(
   apiKey: string,
   systemPrompt: string,
-  message: string,
+  userMessage: string,
   context?: string
 ): Promise<string> {
-  const genAI = new GoogleGenerativeAI(apiKey)
-  const model = genAI.getGenerativeModel({ model: 'gemini-3-pro-preview' })
-
+  const ai = new GoogleGenAI({ apiKey })
+  
   const fullMessage = context
-    ? `${systemPrompt}\n\n${message}\n\nContext:\n${context}`
-    : `${systemPrompt}\n\n${message}`
+    ? `${context}\n\n---\n\n${userMessage}`
+    : userMessage
 
-  const result = await model.generateContent(fullMessage)
-  const response = await result.response
-  return response.text()
+  const response = await ai.models.generateContent({
+    model: 'gemini-2.0-flash',
+    contents: [{ role: 'user', parts: [{ text: `${systemPrompt}\n\n${fullMessage}` }] }]
+  })
+
+  return response.text || ''
 }
