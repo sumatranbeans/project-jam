@@ -2,44 +2,71 @@
 
 import { auth } from '@clerk/nextjs/server'
 import { getApiKeys } from '@/lib/vault'
-import { CodeSandboxProvider } from '@/lib/sandbox/codesandbox'
+import { CodeSandbox } from '@codesandbox/sdk'
 
 // ============================================
-// Helper: Get provider for session (reconnects each time)
+// SDK Singleton
 // ============================================
-async function getProvider(sessionId: string): Promise<CodeSandboxProvider> {
-  const provider = new CodeSandboxProvider()
-  await provider.connect(sessionId)
-  return provider
+function getSDK(): CodeSandbox {
+  return new CodeSandbox(process.env.CSB_API_KEY)
+}
+
+// ============================================
+// Helper: Get provider with timeout and status check
+// ============================================
+async function getConnectedClient(sandboxId: string) {
+  const sdk = getSDK()
+  
+  console.log(`[CSB] Resuming sandbox: ${sandboxId}`)
+  const sandbox = await sdk.sandboxes.resume(sandboxId)
+  
+  console.log(`[CSB] Sandbox status: ${sandbox.status}`)
+  if (sandbox.status === 'hibernating') {
+    console.log('[CSB] Sandbox hibernating, waking up...')
+  }
+  
+  // Connection with hard timeout (12s)
+  console.log('[CSB] Connecting...')
+  const client = await Promise.race([
+    sandbox.connect(),
+    new Promise<never>((_, reject) => 
+      setTimeout(() => reject(new Error('Sandbox connect timeout (12s)')), 12000)
+    )
+  ])
+  
+  console.log('[CSB] Connected successfully')
+  return { sandbox, client }
 }
 
 // ============================================
 // Sandbox Lifecycle
 // ============================================
 export async function startSandboxAction() {
-  const provider = new CodeSandboxProvider()
-  const session = await provider.create()
-  return { sandboxId: session.id }
+  const sdk = getSDK()
+  console.log('[CSB] Creating new sandbox...')
+  const sandbox = await sdk.sandboxes.create()
+  console.log(`[CSB] Created: ${sandbox.id}`)
+  return { sandboxId: sandbox.id }
 }
 
 // ============================================
 // File Operations
 // ============================================
-export async function listFilesAction(sessionId: string, path: string = '.') {
+export async function listFilesAction(sandboxId: string, path: string = '.') {
   try {
-    const provider = await getProvider(sessionId)
-    const files = await provider.listFiles(path)
-    return { files: files.map(f => f.name) }
+    const { client } = await getConnectedClient(sandboxId)
+    const files = await client.fs.readdir(path)
+    return { files: files?.map((f: any) => f.name) || [] }
   } catch (e) {
-    console.error('listFilesAction error:', e)
+    console.error('[CSB] listFiles error:', e)
     return { files: [] }
   }
 }
 
-export async function readFileAction(sessionId: string, filePath: string) {
+export async function readFileAction(sandboxId: string, filePath: string) {
   try {
-    const provider = await getProvider(sessionId)
-    const content = await provider.readFile(filePath)
+    const { client } = await getConnectedClient(sandboxId)
+    const content = await client.fs.readTextFile(filePath)
     return { success: true, content }
   } catch (e) {
     return { success: false, error: String(e) }
@@ -49,7 +76,7 @@ export async function readFileAction(sessionId: string, filePath: string) {
 // ============================================
 // Orchestration
 // ============================================
-export async function orchestrateAction(userIntent: string, sessionId: string) {
+export async function orchestrateAction(userIntent: string, sandboxId: string) {
   const { userId } = await auth()
   if (!userId) throw new Error('Not authenticated')
   
@@ -58,21 +85,21 @@ export async function orchestrateAction(userIntent: string, sessionId: string) {
   
   let files: string[] = []
   try {
-    const provider = await getProvider(sessionId)
-    const fileList = await provider.listFiles('.')
-    files = fileList.map(f => f.name)
+    const { client } = await getConnectedClient(sandboxId)
+    const fileList = await client.fs.readdir('.')
+    files = fileList?.map((f: any) => f.name) || []
   } catch (e) {
-    console.error('Failed to list files:', e)
+    console.error('[CSB] Failed to list files:', e)
   }
   
   const { orchestrate } = await import('@/lib/orchestrator')
-  return orchestrate(keys.anthropic, keys.google, userIntent, sessionId, files)
+  return orchestrate(keys.anthropic, keys.google, userIntent, sandboxId, files)
 }
 
 export async function orchestrateFixAction(
   intent: string,
   failures: { action: string; error: string }[],
-  sessionId: string,
+  sandboxId: string,
   attempt: number,
   silentRetry = 0
 ) {
@@ -84,57 +111,78 @@ export async function orchestrateFixAction(
   
   let files: string[] = []
   try {
-    const provider = await getProvider(sessionId)
-    const fileList = await provider.listFiles('.')
-    files = fileList.map(f => f.name)
+    const { client } = await getConnectedClient(sandboxId)
+    const fileList = await client.fs.readdir('.')
+    files = fileList?.map((f: any) => f.name) || []
   } catch (e) {
-    console.error('Failed to list files:', e)
+    console.error('[CSB] Failed to list files:', e)
   }
   
   const { orchestrateFix } = await import('@/lib/orchestrator')
-  return orchestrateFix(keys.anthropic, keys.google, intent, failures, sessionId, files, attempt, silentRetry)
+  return orchestrateFix(keys.anthropic, keys.google, intent, failures, sandboxId, files, attempt, silentRetry)
 }
 
 // ============================================
-// Execute Actions
+// Execute Actions - THE CRITICAL FIX
 // ============================================
 export async function executeActionsAction(
-  sessionId: string,
+  sandboxId: string,
   actions: { type: string; path?: string; content?: string; command?: string; port?: number }[]
 ) {
   const { userId } = await auth()
   if (!userId) throw new Error('Not authenticated')
   
-  const provider = await getProvider(sessionId)
+  console.log(`[EXEC] Starting execution of ${actions.length} actions`)
+  
+  const { client } = await getConnectedClient(sandboxId)
   const results: { action: string; success: boolean; output?: string; previewUrl?: string }[] = []
 
   for (const action of actions) {
     try {
-      // CREATE FILE
+      // ========== CREATE FILE ==========
       if (action.type === 'createFile' && action.path && action.content) {
-        await provider.writeFile(action.path, action.content)
+        console.log(`[EXEC] Creating file: ${action.path}`)
+        await client.fs.writeTextFile(action.path, action.content)
         results.push({ action: `Create ${action.path}`, success: true })
+        console.log(`[EXEC] ✓ Created: ${action.path}`)
       }
 
-      // RUN COMMAND
+      // ========== RUN COMMAND ==========
       if (action.type === 'runCommand' && action.command) {
-        const isServer = /npm\s+run\s+dev|npm\s+start|yarn\s+dev|npx\s+vite|npx\s+serve/i.test(action.command)
+        const isDevServer = /npm\s+run\s+dev|npm\s+start|yarn\s+dev|npx\s+vite|npx\s+serve/i.test(action.command)
         
-        if (isServer) {
+        if (isDevServer) {
+          // ===== DEV SERVER: Use runBackground + waitForPort =====
           const port = action.port || detectPort(action.command)
           const { cwd, cmd } = parseCwd(action.command)
           
-          await provider.runBackground(cmd, { cwd })
+          console.log(`[EXEC] Starting dev server: ${cmd} (port ${port})`)
           
+          // Start in background - DO NOT await the command itself
+          client.commands.runBackground(cmd, { cwd })
+          
+          console.log(`[EXEC] Waiting for port ${port}...`)
+          
+          // Wait for port with timeout
           try {
-            const portInfo = await provider.waitForPort(port, 30000)
+            const portInfo = await Promise.race([
+              client.ports.waitForPort(port),
+              new Promise<never>((_, reject) => 
+                setTimeout(() => reject(new Error(`Port ${port} timeout (30s)`)), 30000)
+              )
+            ])
+            
+            const previewUrl = portInfo?.getPreviewUrl?.() || `https://${sandboxId}-${port}.csb.app`
+            console.log(`[EXEC] ✓ Server ready: ${previewUrl}`)
+            
             results.push({
               action: action.command,
               success: true,
               output: `Server running on port ${port}`,
-              previewUrl: portInfo.previewUrl
+              previewUrl
             })
           } catch (e) {
+            console.error(`[EXEC] ✗ Port ${port} failed:`, e)
             results.push({
               action: action.command,
               success: false,
@@ -142,19 +190,45 @@ export async function executeActionsAction(
             })
           }
         } else {
-          const result = await provider.run(action.command, { timeout: 120000 })
-          results.push({
-            action: action.command,
-            success: result.success,
-            output: result.stdout || result.stderr
-          })
+          // ===== REGULAR COMMAND: Use run() and await completion =====
+          console.log(`[EXEC] Running command: ${action.command}`)
+          
+          try {
+            // Run with timeout
+            const result = await Promise.race([
+              client.commands.run(action.command),
+              new Promise<never>((_, reject) => 
+                setTimeout(() => reject(new Error('Command timeout (120s)')), 120000)
+              )
+            ])
+            
+            const success = result?.exitCode === 0
+            const output = result?.stdout || result?.stderr || ''
+            
+            console.log(`[EXEC] ${success ? '✓' : '✗'} Command finished: exit=${result?.exitCode}`)
+            
+            results.push({
+              action: action.command,
+              success,
+              output
+            })
+          } catch (e) {
+            console.error(`[EXEC] ✗ Command failed:`, e)
+            results.push({
+              action: action.command,
+              success: false,
+              output: String(e)
+            })
+          }
         }
       }
     } catch (e) {
+      console.error(`[EXEC] Action error:`, e)
       results.push({ action: action.type, success: false, output: String(e) })
     }
   }
 
+  console.log(`[EXEC] Completed. Results: ${results.length}`)
   return results
 }
 
