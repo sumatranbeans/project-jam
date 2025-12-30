@@ -7,36 +7,26 @@ import { getApiKeys } from '@/lib/vault'
 // ============================================
 // Server Command Detection
 // ============================================
-const SERVER_COMMAND_PATTERNS = [
-  /npm\s+run\s+dev/i,
-  /npm\s+start/i,
-  /yarn\s+dev/i,
-  /yarn\s+start/i,
-  /pnpm\s+dev/i,
-  /pnpm\s+start/i,
-  /npx\s+serve/i,
-  /npx\s+vite/i,
-  /python.*http\.server/i,
-  /python.*SimpleHTTPServer/i,
-  /node\s+server/i,
-  /next\s+dev/i,
+const SERVER_PATTERNS = [
+  /npm\s+run\s+dev/i, /npm\s+start/i, /yarn\s+dev/i, /pnpm\s+dev/i,
+  /npx\s+serve/i, /npx\s+vite/i, /python.*http\.server/i, /next\s+dev/i
 ]
 
-function isServerCommand(command: string): boolean {
-  return SERVER_COMMAND_PATTERNS.some(pattern => pattern.test(command))
+function isServerCommand(cmd: string): boolean {
+  return SERVER_PATTERNS.some(p => p.test(cmd))
 }
 
-function detectPort(command: string): number {
-  const portMatch = command.match(/(?:--port|--p|-p)\s*(\d+)/) || command.match(/(\d{4})/)
-  if (portMatch) {
-    const port = parseInt(portMatch[1])
-    if (port >= 1000 && port <= 65535) return port
-  }
-  if (command.includes('vite') || command.includes('npm run dev')) return 5173
-  if (command.includes('next')) return 3000
-  if (command.includes('serve')) return 3000
-  if (command.includes('http.server')) return 8000
+function detectPort(cmd: string): number {
+  const match = cmd.match(/--port\s*(\d+)/) || cmd.match(/:(\d{4})/) || cmd.match(/\s(\d{4})\s*$/)
+  if (match) return parseInt(match[1])
+  if (cmd.includes('vite') || cmd.includes('npm run dev')) return 5173
+  if (cmd.includes('next')) return 3000
   return 8080
+}
+
+function extractCwd(cmd: string): { cwd?: string; cleanCmd: string } {
+  const match = cmd.match(/^cd\s+([^\s&]+)\s*&&\s*(.+)$/)
+  return match ? { cwd: match[1], cleanCmd: match[2].trim() } : { cleanCmd: cmd }
 }
 
 // ============================================
@@ -47,7 +37,7 @@ export async function startSandboxAction() {
   return { sandboxId: sandbox.sandboxId }
 }
 
-export async function listFilesAction(sandboxId: string, path: string = '.') {
+export async function listFilesAction(sandboxId: string, path = '.') {
   const sandbox = await Sandbox.connect(sandboxId, { apiKey: process.env.E2B_API_KEY })
   const files = await sandbox.files.list(path)
   return { files: files.map(f => f.name) }
@@ -57,16 +47,17 @@ export async function readFileAction(sandboxId: string, filePath: string) {
   const sandbox = await Sandbox.connect(sandboxId, { apiKey: process.env.E2B_API_KEY })
   try {
     const content = await sandbox.files.read(filePath)
-    return { success: true, content }
-  } catch (error) {
-    return { success: false, error: String(error) }
+    const text = typeof content === 'string' ? content : new TextDecoder().decode(content)
+    return { success: true, content: text }
+  } catch (e) {
+    return { success: false, error: String(e) }
   }
 }
 
-export async function purgeDirectoryAction(sandboxId: string, targetPath: string) {
+export async function purgeDirectoryAction(sandboxId: string, path: string) {
   const sandbox = await Sandbox.connect(sandboxId, { apiKey: process.env.E2B_API_KEY })
-  const result = await sandbox.commands.run(`rm -rf ${targetPath}`)
-  return { success: result.exitCode === 0, output: result.stderr || result.stdout }
+  const r = await sandbox.commands.run(`rm -rf ${path}`)
+  return { success: r.exitCode === 0 }
 }
 
 export async function fullResetAction() {
@@ -75,56 +66,38 @@ export async function fullResetAction() {
 }
 
 // ============================================
-// GitHub Actions
-// ============================================
-export async function createRepoAction(name: string) {
-  const { userId } = await auth()
-  if (!userId) throw new Error('Not authenticated')
-  const keys = await getApiKeys(userId)
-  if (!keys.github) throw new Error('GitHub not connected')
-  const { createRepo, getUser } = await import('@/lib/github')
-  const user = await getUser(keys.github)
-  const repo = await createRepo(keys.github, name, true)
-  return { repoUrl: repo.html_url, owner: user.login, name: repo.name, cloneUrl: repo.clone_url }
-}
-
-// ============================================
-// Orchestrator Actions
+// Orchestration Actions
 // ============================================
 export async function orchestrateAction(userIntent: string, sandboxId: string) {
   const { userId } = await auth()
   if (!userId) throw new Error('Not authenticated')
   const keys = await getApiKeys(userId)
-  if (!keys.anthropic) throw new Error('Anthropic key not configured')
-  if (!keys.google) throw new Error('Google key not configured')
+  if (!keys.anthropic || !keys.google) throw new Error('API keys not configured')
   const { orchestrate } = await import('@/lib/orchestrator')
   const sandbox = await Sandbox.connect(sandboxId, { apiKey: process.env.E2B_API_KEY })
   const files = await sandbox.files.list('.')
-  const fileTree = files.map(f => f.name)
-  return await orchestrate(keys.anthropic, keys.google, userIntent, sandboxId, fileTree)
+  return orchestrate(keys.anthropic, keys.google, userIntent, sandboxId, files.map(f => f.name))
 }
 
 export async function orchestrateFixAction(
-  originalIntent: string,
-  failedActions: { action: string; error: string }[],
+  intent: string,
+  failures: { action: string; error: string }[],
   sandboxId: string,
-  attemptNumber: number,
-  silentRetryCount: number = 0
+  attempt: number,
+  silentRetry = 0
 ) {
   const { userId } = await auth()
   if (!userId) throw new Error('Not authenticated')
   const keys = await getApiKeys(userId)
-  if (!keys.anthropic) throw new Error('Anthropic key not configured')
-  if (!keys.google) throw new Error('Google key not configured')
+  if (!keys.anthropic || !keys.google) throw new Error('API keys not configured')
   const { orchestrateFix } = await import('@/lib/orchestrator')
   const sandbox = await Sandbox.connect(sandboxId, { apiKey: process.env.E2B_API_KEY })
   const files = await sandbox.files.list('.')
-  const fileTree = files.map(f => f.name)
-  return await orchestrateFix(keys.anthropic, keys.google, originalIntent, failedActions, sandboxId, fileTree, attemptNumber, silentRetryCount)
+  return orchestrateFix(keys.anthropic, keys.google, intent, failures, sandboxId, files.map(f => f.name), attempt, silentRetry)
 }
 
 // ============================================
-// Execute Actions (with correct E2B URL)
+// Execute Actions (with E2B background: true + liveness check)
 // ============================================
 export async function executeActionsAction(
   sandboxId: string,
@@ -134,46 +107,95 @@ export async function executeActionsAction(
   if (!userId) throw new Error('Not authenticated')
   const keys = await getApiKeys(userId)
   const sandbox = await Sandbox.connect(sandboxId, { apiKey: process.env.E2B_API_KEY })
-  
+
   const results: { action: string; success: boolean; output?: string; previewUrl?: string; port?: number }[] = []
 
   for (const action of actions) {
     try {
+      // CREATE FILE
       if (action.type === 'createFile' && action.path && action.content) {
         await sandbox.files.write(action.path, action.content)
         results.push({ action: `Create ${action.path}`, success: true })
       }
-      
+
+      // RUN COMMAND
       if (action.type === 'runCommand' && action.command) {
-        if (isServerCommand(action.command)) {
-          const port = detectPort(action.command)
-          await sandbox.commands.run(`nohup ${action.command} > /tmp/server.log 2>&1 &`, { timeoutMs: 5000 })
-          await new Promise(resolve => setTimeout(resolve, 3000))
-          // Use E2B's getHost method for correct URL
-          const host = sandbox.getHost(port)
-          const previewUrl = `https://${host}`
-          results.push({ action: action.command, success: true, output: `Server running on port ${port}`, previewUrl, port })
+        const { cwd, cleanCmd } = extractCwd(action.command)
+
+        if (isServerCommand(cleanCmd)) {
+          const port = detectPort(cleanCmd)
+
+          // === THE FIX: Use E2B's native background execution ===
+          await sandbox.commands.run(cleanCmd, {
+            background: true,
+            cwd: cwd || undefined
+          })
+
+          // Wait for server to initialize
+          await new Promise(r => setTimeout(r, 5000))
+
+          // === LIVENESS CHECK: Verify server is actually running ===
+          let isAlive = false
+          for (let i = 0; i < 3; i++) {
+            const check = await sandbox.commands.run(
+              `curl -s -o /dev/null -w "%{http_code}" http://localhost:${port} || echo "failed"`,
+              { timeoutMs: 3000 }
+            )
+            const code = check.stdout?.trim()
+            if (code && code !== 'failed' && code !== '000') {
+              isAlive = true
+              break
+            }
+            await new Promise(r => setTimeout(r, 2000))
+          }
+
+          if (isAlive) {
+            const host = sandbox.getHost(port)
+            const previewUrl = `https://${host}`
+            results.push({
+              action: action.command,
+              success: true,
+              output: `Server verified on port ${port}`,
+              previewUrl,
+              port
+            })
+          } else {
+            // Server didn't start - report failure for self-correction
+            results.push({
+              action: action.command,
+              success: false,
+              output: `Server started but liveness check failed on port ${port}. Process may have crashed.`
+            })
+          }
         } else {
-          const result = await sandbox.commands.run(action.command, { timeoutMs: 120000 })
-          results.push({ action: action.command, success: result.exitCode === 0, output: result.stdout || result.stderr })
+          // Regular command
+          const r = await sandbox.commands.run(action.command, { timeoutMs: 120000 })
+          results.push({
+            action: action.command,
+            success: r.exitCode === 0,
+            output: r.stdout || r.stderr
+          })
         }
       }
-      
-      if (action.type === 'createRepo' && action.name) {
-        if (!keys.github) throw new Error('GitHub not connected')
+
+      // CREATE REPO
+      if (action.type === 'createRepo' && action.name && keys.github) {
         const { createRepo, getUser } = await import('@/lib/github')
         const user = await getUser(keys.github)
         const repo = await createRepo(keys.github, action.name, true)
         results.push({ action: `Create repo ${action.name}`, success: true, output: repo.html_url })
       }
-      
+
+      // COMMIT
       if (action.type === 'commit' && action.message) {
-        const result = await sandbox.commands.run(`git add -A && git commit -m "${action.message}"`)
-        results.push({ action: `Commit: ${action.message}`, success: result.exitCode === 0, output: result.stdout || result.stderr })
+        const r = await sandbox.commands.run(`git add -A && git commit -m "${action.message}"`)
+        results.push({ action: `Commit`, success: r.exitCode === 0, output: r.stdout || r.stderr })
       }
-    } catch (error) {
-      results.push({ action: action.type, success: false, output: String(error) })
+
+    } catch (e) {
+      results.push({ action: action.type, success: false, output: String(e) })
     }
   }
+
   return results
 }

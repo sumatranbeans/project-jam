@@ -6,20 +6,14 @@ import { BrainPanel, type Message } from '@/components/BrainPanel'
 import { OutputPanel, type TerminalLine } from '@/components/OutputPanel'
 import { CommandBar } from '@/components/CommandBar'
 import { StatusIndicator, type AgentStatus } from '@/components/StatusIndicator'
-import { 
-  startSandboxAction, 
-  listFilesAction, 
-  orchestrateAction, 
-  executeActionsAction, 
-  orchestrateFixAction,
-  purgeDirectoryAction,
-  fullResetAction,
-  readFileAction
+import {
+  startSandboxAction, listFilesAction, orchestrateAction, executeActionsAction,
+  orchestrateFixAction, purgeDirectoryAction, fullResetAction, readFileAction
 } from './actions'
 import { checkOnboardingAction } from './vault-actions'
 import { Zap, LogOut, Settings } from 'lucide-react'
 
-const MAX_FIX_ATTEMPTS = 3
+const MAX_ATTEMPTS = 3
 
 export default function Home() {
   const { user, isLoaded } = useUser()
@@ -32,56 +26,46 @@ export default function Home() {
   const [fileTree, setFileTree] = useState<string[]>([])
   const [isProcessing, setIsProcessing] = useState(false)
   const [checkingOnboarding, setCheckingOnboarding] = useState(true)
-  const [previewUrl, setPreviewUrl] = useState<string | undefined>(undefined)
+  const [previewUrl, setPreviewUrl] = useState<string | undefined>()
   const silentRetryRef = useRef(0)
-  const issuesResolvedRef = useRef(0)
+  const issuesRef = useRef(0)
   const reflexIdRef = useRef<string | null>(null)
 
-  useEffect(() => {
-    if (isLoaded && user) checkOnboarding()
-  }, [isLoaded, user])
+  useEffect(() => { if (isLoaded && user) checkOnboarding() }, [isLoaded, user])
 
   const checkOnboarding = async () => {
     try {
       const { completed } = await checkOnboardingAction()
       if (!completed) router.push('/onboarding')
-    } finally {
-      setCheckingOnboarding(false)
-    }
+    } finally { setCheckingOnboarding(false) }
   }
 
-  const addMessage = useCallback((role: Message['role'], content: string, extra?: Partial<Message>) => {
+  const addMsg = useCallback((role: Message['role'], content: string, extra?: Partial<Message>) => {
     const id = crypto.randomUUID()
-    setMessages(prev => [...prev, { id, role, content, timestamp: new Date(), ...extra }])
+    setMessages(p => [...p, { id, role, content, timestamp: new Date(), ...extra }])
     return id
   }, [])
 
-  const removeMessage = useCallback((id: string) => {
-    setMessages(prev => prev.filter(m => m.id !== id))
-  }, [])
-
-  const updateMessage = useCallback((id: string, updates: Partial<Message>) => {
-    setMessages(prev => prev.map(m => m.id === id ? { ...m, ...updates } : m))
-  }, [])
-
-  const addTerminal = useCallback((type: TerminalLine['type'], content: string) => {
-    setTerminalLines(prev => [...prev, { id: crypto.randomUUID(), type, content, timestamp: new Date() }])
+  const removeMsg = useCallback((id: string) => setMessages(p => p.filter(m => m.id !== id)), [])
+  const updateMsg = useCallback((id: string, u: Partial<Message>) => setMessages(p => p.map(m => m.id === id ? { ...m, ...u } : m)), [])
+  const addTerm = useCallback((type: TerminalLine['type'], content: string) => {
+    setTerminalLines(p => [...p, { id: crypto.randomUUID(), type, content, timestamp: new Date() }])
   }, [])
 
   const connectSandbox = async (): Promise<string | null> => {
     setSandboxStatus('connecting')
-    addTerminal('system', 'Connecting to E2B sandbox...')
+    addTerm('system', 'Connecting to E2B sandbox...')
     try {
       const { sandboxId: id } = await startSandboxAction()
       setSandboxId(id)
       setSandboxStatus('active')
-      addTerminal('system', `Connected: ${id}`)
+      addTerm('system', `Connected: ${id}`)
       const { files } = await listFilesAction(id)
       if (files) setFileTree(files)
       return id
     } catch (e) {
       setSandboxStatus('error')
-      addTerminal('stderr', `Connection failed: ${e}`)
+      addTerm('stderr', `Failed: ${e}`)
       return null
     }
   }
@@ -98,189 +82,144 @@ export default function Home() {
 
   const executeWithRetry = async (
     actions: { type: string; path?: string; content?: string; command?: string; name?: string; message?: string }[],
-    sbId: string,
-    intent: string,
-    attempt: number = 1
+    sbId: string, intent: string, attempt = 1
   ): Promise<{ success: boolean; previewUrl?: string }> => {
-    addTerminal('system', attempt === 1 ? 'Executing...' : `Retrying (attempt ${attempt})...`)
-    
+    addTerm('system', attempt === 1 ? 'Executing...' : `Retry ${attempt}...`)
     const results = await executeActionsAction(sbId, actions)
     const failures: { action: string; error: string }[] = []
-    let foundPreviewUrl: string | undefined
+    let foundUrl: string | undefined
 
     for (const r of results) {
       if (r.success) {
-        addTerminal('stdout', `✓ ${r.action}`)
-        if (r.output) addTerminal('stdout', r.output)
-        if (r.previewUrl) {
-          foundPreviewUrl = r.previewUrl
-          setPreviewUrl(r.previewUrl)
-          addTerminal('system', `🌐 Preview: ${r.previewUrl}`)
-        }
+        addTerm('stdout', `✓ ${r.action}`)
+        if (r.output) addTerm('stdout', r.output)
+        if (r.previewUrl) { foundUrl = r.previewUrl; setPreviewUrl(r.previewUrl); addTerm('system', `🌐 Preview: ${r.previewUrl}`) }
       } else {
-        addTerminal('stderr', `✗ ${r.action}`)
-        if (r.output) addTerminal('stderr', r.output)
-        failures.push({ action: r.action, error: r.output || 'Unknown error' })
+        addTerm('stderr', `✗ ${r.action}`)
+        if (r.output) addTerm('stderr', r.output)
+        failures.push({ action: r.action, error: r.output || 'Unknown' })
       }
     }
-
     await refreshFiles(sbId)
 
-    if (failures.length === 0) {
-      addTerminal('system', '✓ All actions completed')
-      if (reflexIdRef.current) {
-        removeMessage(reflexIdRef.current)
-        reflexIdRef.current = null
-      }
-      return { success: true, previewUrl: foundPreviewUrl }
+    if (!failures.length) {
+      if (reflexIdRef.current) { removeMsg(reflexIdRef.current); reflexIdRef.current = null }
+      return { success: true, previewUrl: foundUrl }
     }
 
-    if (attempt >= MAX_FIX_ATTEMPTS) {
-      addTerminal('stderr', `Max attempts reached`)
-      if (reflexIdRef.current) {
-        removeMessage(reflexIdRef.current)
-        reflexIdRef.current = null
-      }
-      addMessage('gemini', 'Director, the team needs your guidance. Please review the errors in the terminal and advise on how to proceed.')
+    if (attempt >= MAX_ATTEMPTS) {
+      if (reflexIdRef.current) { removeMsg(reflexIdRef.current); reflexIdRef.current = null }
+      addMsg('gemini', 'Director, the team needs guidance. Please review the terminal errors.')
       return { success: false }
     }
 
-    // Self-correction
     setAgentStatus('claude-coding')
     const fix = await orchestrateFixAction(intent, failures, sbId, attempt + 1, silentRetryRef.current)
 
     if (fix.silentRetry) {
       silentRetryRef.current++
-      addTerminal('system', 'Transient error, retrying...')
       await new Promise(r => setTimeout(r, 2000))
       return executeWithRetry(actions, sbId, intent, attempt)
     }
 
-    // Show reflex indicator
-    const reflexMsg = fix.userFacingSummary || 'Self-correcting...'
-    if (reflexIdRef.current) {
-      updateMessage(reflexIdRef.current, { content: reflexMsg, attemptNumber: attempt + 1 })
-    } else {
-      reflexIdRef.current = addMessage('reflex', reflexMsg, { attemptNumber: attempt + 1 })
-    }
+    const msg = fix.userFacingSummary || 'Self-correcting...'
+    if (reflexIdRef.current) updateMsg(reflexIdRef.current, { content: msg, attemptNumber: attempt + 1 })
+    else reflexIdRef.current = addMsg('reflex', msg, { attemptNumber: attempt + 1 })
 
-    if (fix.issuesResolved) issuesResolvedRef.current += fix.issuesResolved
+    if (fix.issuesResolved) issuesRef.current += fix.issuesResolved
 
     if (fix.phase === 'escalate' || fix.requiresDirectorInput) {
-      if (reflexIdRef.current) {
-        removeMessage(reflexIdRef.current)
-        reflexIdRef.current = null
-      }
-      addMessage('gemini', fix.error || 'Director, the team has encountered an issue that requires your input.')
+      if (reflexIdRef.current) { removeMsg(reflexIdRef.current); reflexIdRef.current = null }
+      addMsg('gemini', fix.error || 'The team needs your input.')
       return { success: false }
     }
 
     if (fix.resetStrategy === 'purge_directory' && fix.targetPath) {
-      addTerminal('system', `Cleaning ${fix.targetPath}...`)
+      addTerm('system', `Cleaning ${fix.targetPath}...`)
       await purgeDirectoryAction(sbId, fix.targetPath)
     } else if (fix.resetStrategy === 'full_reset') {
-      addTerminal('system', 'Resetting sandbox...')
       const { sandboxId: newId } = await fullResetAction()
-      setSandboxId(newId)
-      sbId = newId
-      addTerminal('system', `New sandbox: ${newId}`)
+      setSandboxId(newId); sbId = newId
+      addTerm('system', `New sandbox: ${newId}`)
       setPreviewUrl(undefined)
     }
 
-    if (fix.approved && fix.finalActions.length > 0) {
+    if (fix.approved && fix.finalActions.length) {
       return executeWithRetry(fix.finalActions, sbId, intent, attempt + 1)
     }
-
     return { success: false }
   }
 
   const handleUserMessage = async (message: string) => {
     setIsProcessing(true)
-    addMessage('user', message)
+    addMsg('user', message)
     silentRetryRef.current = 0
-    issuesResolvedRef.current = 0
+    issuesRef.current = 0
     reflexIdRef.current = null
 
     let sbId = sandboxId
-    if (!sbId) {
-      setAgentStatus('executing')
-      sbId = await connectSandbox()
-    }
-    if (!sbId) {
-      addMessage('gemini', 'Failed to connect to the sandbox. Please try again.')
-      setIsProcessing(false)
-      return
-    }
+    if (!sbId) { setAgentStatus('executing'); sbId = await connectSandbox() }
+    if (!sbId) { addMsg('gemini', 'Failed to connect.'); setIsProcessing(false); return }
 
     try {
-      // Phase 1: Architect analyzes
+      // PHASE 1: Architect blueprints
       setAgentStatus('gemini-auditing')
-      addTerminal('system', 'Product Architect analyzing...')
+      addTerm('system', 'Product Architect analyzing...')
       const result = await orchestrateAction(message, sbId)
 
       if (result.phase === 'clarification') {
-        addMessage('gemini', result.architectMessage || 'Could you provide more details?')
-        setAgentStatus('idle')
-        setIsProcessing(false)
-        return
+        addMsg('gemini', result.architectMessage || 'Could you clarify?')
+        setAgentStatus('idle'); setIsProcessing(false); return
       }
 
-      // Show Architect's blueprint
-      if (result.architectMessage) {
-        addMessage('gemini', result.architectMessage)
+      // Show Architect blueprint
+      if (result.architectMessage) addMsg('gemini', result.architectMessage)
+
+      // PHASE 2: Engineer proposes (SHOW THIS BEFORE APPROVAL)
+      if (result.builderPlan?.response) {
+        setAgentStatus('claude-coding')
+        addTerm('system', 'Engineering Lead planning...')
+        addMsg('claude', result.builderPlan.response)
       }
 
-      // Phase 2: Architect reviews (show approval/veto)
+      // PHASE 3: Architect reviews (now makes sense - reviewing visible plan)
       if (result.architectReview) {
         setAgentStatus('gemini-auditing')
-        addMessage('gemini', result.architectReview.reasoning, { approved: result.approved })
+        addMsg('gemini', result.architectReview.reasoning, { approved: result.approved })
       }
 
-      // Phase 3: Execute (if approved)
-      if (result.approved && result.finalActions.length > 0) {
+      // PHASE 4: Execute
+      if (result.approved && result.finalActions.length) {
         setAgentStatus('executing')
-        addTerminal('system', 'Engineering Lead executing...')
-        
-        const { success, previewUrl: finalUrl } = await executeWithRetry(result.finalActions, sbId, message)
+        addTerm('system', 'Executing build...')
+        const { success, previewUrl: url } = await executeWithRetry(result.finalActions, sbId, message)
 
-        // Remove reflex indicator if still present
-        if (reflexIdRef.current) {
-          removeMessage(reflexIdRef.current)
-          reflexIdRef.current = null
-        }
+        if (reflexIdRef.current) { removeMsg(reflexIdRef.current); reflexIdRef.current = null }
 
-        // Phase 4: Engineering Lead reports completion (AFTER execution)
         if (success) {
-          let completionMsg = '✓ Build complete.'
-          if (issuesResolvedRef.current > 0) {
-            completionMsg += ` Auto-resolved ${issuesResolvedRef.current} ${issuesResolvedRef.current === 1 ? 'issue' : 'issues'}.`
-          }
-          completionMsg += '\n\n'
-          if (finalUrl || previewUrl) {
-            completionMsg += `**Preview:** ${finalUrl || previewUrl}\n`
-            completionMsg += 'Click the **Preview** tab to see it live.'
+          let msg = '✓ Build complete.'
+          if (issuesRef.current > 0) msg += ` Auto-resolved ${issuesRef.current} issue${issuesRef.current > 1 ? 's' : ''}.`
+          if (url || previewUrl) {
+            msg += `\n\n**Preview:** ${url || previewUrl}\nClick the **Preview** tab to see it live.`
           } else {
-            completionMsg += 'Check the **Files** tab to view the code.'
+            msg += '\n\nCheck the **Files** tab to view the code.'
           }
-          addMessage('claude', completionMsg)
+          addMsg('claude', msg)
         }
       } else if (!result.approved) {
-        addTerminal('system', 'Plan not approved')
+        addTerm('system', 'Plan not approved')
       }
 
       setAgentStatus('idle')
     } catch (e) {
-      addTerminal('stderr', `Error: ${e}`)
-      addMessage('gemini', 'Something went wrong. Please check the terminal for details.')
+      addTerm('stderr', `Error: ${e}`)
+      addMsg('gemini', 'Something went wrong.')
       setAgentStatus('idle')
     }
-
     setIsProcessing(false)
   }
 
-  if (!isLoaded || checkingOnboarding) {
-    return <div className="min-h-screen flex items-center justify-center bg-gray-50">Loading...</div>
-  }
+  if (!isLoaded || checkingOnboarding) return <div className="min-h-screen flex items-center justify-center bg-gray-50">Loading...</div>
 
   return (
     <main className="flex flex-col h-screen bg-jam-bg">
