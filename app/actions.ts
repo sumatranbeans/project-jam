@@ -12,18 +12,13 @@ function getSDK(): CodeSandbox {
 }
 
 // ============================================
-// Helper: Get provider with timeout and status check
+// Helper: Get provider with timeout
 // ============================================
-async function getConnectedClient(sandboxId: string) {
+async function getConnectedClient(sandboxId: string): Promise<{ sandbox: any; client: any }> {
   const sdk = getSDK()
   
   console.log(`[CSB] Resuming sandbox: ${sandboxId}`)
   const sandbox = await sdk.sandboxes.resume(sandboxId)
-  
-  console.log(`[CSB] Sandbox status: ${sandbox.status}`)
-  if (sandbox.status === 'hibernating') {
-    console.log('[CSB] Sandbox hibernating, waking up...')
-  }
   
   // Connection with hard timeout (12s)
   console.log('[CSB] Connecting...')
@@ -165,7 +160,7 @@ export async function executeActionsAction(
           
           // Wait for port with timeout
           try {
-            const portInfo = await Promise.race([
+            const portInfo: any = await Promise.race([
               client.ports.waitForPort(port),
               new Promise<never>((_, reject) => 
                 setTimeout(() => reject(new Error(`Port ${port} timeout (30s)`)), 30000)
@@ -195,17 +190,18 @@ export async function executeActionsAction(
           
           try {
             // Run with timeout
-            const result = await Promise.race([
+            const result: any = await Promise.race([
               client.commands.run(action.command),
               new Promise<never>((_, reject) => 
                 setTimeout(() => reject(new Error('Command timeout (120s)')), 120000)
               )
             ])
             
-            const success = result?.exitCode === 0
-            const output = result?.stdout || result?.stderr || ''
+            const exitCode = result?.exitCode ?? result?.code ?? 1
+            const success = exitCode === 0
+            const output = result?.stdout || result?.stderr || result?.output || ''
             
-            console.log(`[EXEC] ${success ? '✓' : '✗'} Command finished: exit=${result?.exitCode}`)
+            console.log(`[EXEC] ${success ? '✓' : '✗'} Command finished: exit=${exitCode}`)
             
             results.push({
               action: action.command,
