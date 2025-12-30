@@ -1,14 +1,13 @@
 // lib/orchestrator.ts
+
 import { callClaude, BUILDER_SYSTEM_PROMPT } from './claude'
 import { callGemini, ARCHITECT_INTAKE_PROMPT, ARCHITECT_REVIEW_PROMPT } from './gemini'
 
 // ============================================
 // TYPES
 // ============================================
-export type ActionType = 'createFile' | 'runCommand'
-
 export type Action = {
-  type: ActionType
+  type: 'createFile' | 'runCommand'
   path?: string
   content?: string
   command?: string
@@ -23,11 +22,10 @@ export type BuilderResponse = {
 export type ArchitectReview = {
   approved: boolean
   reasoning: string
-  concerns: string[]
 }
 
 export type OrchestrationResult = {
-  phase: 'clarification' | 'building' | 'complete' | 'escalate'
+  phase: 'clarification' | 'complete' | 'escalate'
   architectMessage?: string
   builderPlan?: BuilderResponse
   architectReview?: ArchitectReview
@@ -36,101 +34,71 @@ export type OrchestrationResult = {
   error?: string
   requiresDirectorInput?: boolean
   silentRetry?: boolean
-  resetStrategy?: string
-  targetPath?: string
   userFacingSummary?: string
   issuesResolved?: number
 }
 
 // ============================================
-// ENVIRONMENT CONTEXT (CodeSandbox)
+// ENVIRONMENT CONTEXT
 // ============================================
-export function buildEnvironmentContext(sessionId: string, fileTree: string[]): string {
+function buildContext(sessionId: string, files: string[]): string {
   return `
-### RUNTIME ENVIRONMENT
-- **Provider**: CodeSandbox (microVM with snapshot/restore)
-- **Session ID**: ${sessionId}
-- **Access**: Remote cloud environment. Director accesses via Preview URL.
-- **Preview URL Pattern**: https://${sessionId}-{PORT}.csb.app
-  - Example Vite (port 5173): https://${sessionId}-5173.csb.app
-  - Example Next.js (port 3000): https://${sessionId}-3000.csb.app
+## ENVIRONMENT
+- Platform: CodeSandbox (cloud VM)
+- Session: ${sessionId}
+- Preview URL pattern: https://${sessionId}-{PORT}.csb.app
+- Working directory: /project/workspace
 
-### HOW DEV SERVERS WORK HERE
-- Run \`npm run dev\` normally — the system handles background execution
-- When the port opens, it's automatically exposed at the Preview URL
-- The Director can click the Preview URL and see the live app immediately
-
-### CRITICAL RULES
-1. NEVER mention localhost or 127.0.0.1 — the Director cannot access them
-2. After starting a dev server, tell the Director the exact Preview URL
-3. For Vite projects, the default port is 5173
-4. Files persist — the sandbox can be resumed later
-
-### CURRENT WORKSPACE STATE
-Files: ${fileTree.length === 0 ? '(empty workspace — fresh start)' : fileTree.join(', ')}
+## RULES
+1. NEVER mention localhost - Director cannot access it
+2. For dev servers, preview URL is https://${sessionId}-5173.csb.app (Vite) or https://${sessionId}-3000.csb.app (Next.js)
+3. Files: ${files.length ? files.join(', ') : '(empty workspace)'}
 `.trim()
 }
 
 // ============================================
-// UTILITIES
+// JSON PARSER
 // ============================================
-function sanitizeError(error: string): string {
-  return error.replace(/\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}[^\s]*/g, '[TS]').replace(/\s+/g, ' ').trim()
-}
-
-const TRANSIENT = [/ETIMEDOUT/i, /ECONNRESET/i, /ENOTFOUND/i, /socket hang up/i, /50[0234]/]
-function isTransientError(e: string): boolean {
-  return TRANSIENT.some(p => p.test(e))
-}
-
-let prevSig: string | null = null
-function detectStagnation(errors: string[]): boolean {
-  const sig = errors.map(sanitizeError).sort().join('|')
-  if (sig === prevSig) return true
-  prevSig = sig
-  return false
-}
-
-export function resetLoopDetection() { prevSig = null }
-
-function parseJSON(raw: string): { ok: boolean; data?: unknown; error?: string } {
+function parseJSON(raw: string): { ok: boolean; data?: any; error?: string } {
   try {
-    return { ok: true, data: JSON.parse(raw.replace(/```json\n?|\n?```/g, '').trim()) }
+    // Remove markdown code blocks if present
+    let clean = raw.trim()
+    if (clean.startsWith('```json')) {
+      clean = clean.slice(7)
+    } else if (clean.startsWith('```')) {
+      clean = clean.slice(3)
+    }
+    if (clean.endsWith('```')) {
+      clean = clean.slice(0, -3)
+    }
+    clean = clean.trim()
+    
+    console.log('[DEBUG] Parsing JSON:', clean.substring(0, 200) + '...')
+    const parsed = JSON.parse(clean)
+    console.log('[DEBUG] Parsed successfully, actions count:', parsed.actions?.length || 0)
+    return { ok: true, data: parsed }
   } catch (e) {
+    console.error('[DEBUG] JSON parse error:', e)
+    console.error('[DEBUG] Raw input was:', raw.substring(0, 500))
     return { ok: false, error: String(e) }
   }
 }
 
 // ============================================
-// FIX PROMPTS
+// ERROR DETECTION
 // ============================================
-const ENGINEER_FIX_PROMPT = `You are the Engineering Lead. Some actions failed. Diagnose and fix.
-
-Respond with JSON only:
-{
-  "diagnosis": "what went wrong",
-  "userFacingSummary": "brief status for Director (no technical jargon)",
-  "failureCategory": "plumbing|logic|architectural",
-  "actions": [{ "type": "createFile"|"runCommand", "path": "...", "content": "...", "command": "..." }],
-  "escalate": false,
-  "response": "summary of fix"
+const TRANSIENT = [/ETIMEDOUT/i, /ECONNRESET/i, /socket hang up/i]
+function isTransient(e: string): boolean {
+  return TRANSIENT.some(p => p.test(e))
 }
 
-Rules:
-- Don't repeat the exact failed command — fix the root cause first
-- NEVER suggest localhost URLs — use the CodeSandbox preview URL pattern
-- If dependencies are missing, install them
-- If a directory doesn't exist, create files with full paths`
-
-const ARCHITECT_FIX_REVIEW = `You are the Product Architect reviewing a fix proposal.
-
-Respond with JSON only:
-{
-  "assessment": "your analysis",
-  "approve_retry": true|false,
-  "escalate_to_director": false,
-  "message": "brief message"
-}`
+let lastErrorSig = ''
+function isStagnant(errors: string[]): boolean {
+  const sig = errors.sort().join('|')
+  if (sig === lastErrorSig) return true
+  lastErrorSig = sig
+  return false
+}
 
 // ============================================
 // MAIN ORCHESTRATION
@@ -138,148 +106,149 @@ Respond with JSON only:
 export async function orchestrate(
   claudeKey: string,
   geminiKey: string,
-  directorIntent: string,
+  intent: string,
   sessionId: string,
-  fileTree: string[]
+  files: string[]
 ): Promise<OrchestrationResult> {
-  resetLoopDetection()
-  const context = buildEnvironmentContext(sessionId, fileTree)
+  lastErrorSig = ''
+  const ctx = buildContext(sessionId, files)
 
-  // Phase 1: Architect blueprints
-  const architectResponse = await callGemini(geminiKey, ARCHITECT_INTAKE_PROMPT, `Director's request: "${directorIntent}"`, context)
+  console.log('[DEBUG] Starting orchestration for:', intent)
 
-  const lower = architectResponse.toLowerCase()
-  const isHandoff = ['engineering lead', 'blueprint', 'implement', 'build', 'create', 'proceed'].some(k => lower.includes(k))
-  const isClarification = ['what would you like', 'could you clarify', 'can you specify'].some(k => lower.includes(k)) && !isHandoff
-
-  if (isClarification) {
-    return { phase: 'clarification', architectMessage: architectResponse, approved: false, finalActions: [] }
-  }
-
-  // Phase 2: Engineer builds
-  const builderRaw = await callClaude(claudeKey, BUILDER_SYSTEM_PROMPT, `Architect's blueprint:\n${architectResponse}\n\nDirector's original request: "${directorIntent}"`, context)
-  const builderParsed = parseJSON(builderRaw)
+  // 1. Architect analyzes
+  console.log('[DEBUG] Calling Gemini (Architect)...')
+  const archResponse = await callGemini(geminiKey, ARCHITECT_INTAKE_PROMPT, `Director: "${intent}"`, ctx)
+  console.log('[DEBUG] Architect response:', archResponse.substring(0, 200))
   
-  if (!builderParsed.ok) {
-    return { phase: 'building', architectMessage: architectResponse, approved: false, finalActions: [], error: builderParsed.error }
+  // Check if clarification needed
+  const lower = archResponse.toLowerCase()
+  if (['clarify', 'what would you like', 'can you specify'].some(k => lower.includes(k)) && 
+      !['blueprint', 'engineering lead', 'proceed'].some(k => lower.includes(k))) {
+    console.log('[DEBUG] Architect needs clarification')
+    return { phase: 'clarification', architectMessage: archResponse, approved: false, finalActions: [] }
   }
 
-  const builderPlan = builderParsed.data as BuilderResponse
-
-  // Phase 3: Architect reviews
-  if (builderPlan.actions?.length > 0) {
-    const reviewRaw = await callGemini(geminiKey, ARCHITECT_REVIEW_PROMPT, `Director's intent: "${directorIntent}"\n\nEngineer's plan:\n${JSON.stringify(builderPlan, null, 2)}`, context)
-    const reviewParsed = parseJSON(reviewRaw)
-    
-    let review: ArchitectReview
-    if (reviewParsed.ok) {
-      review = reviewParsed.data as ArchitectReview
-    } else {
-      // Fallback: check if response contains approval language
-      review = { 
-        approved: reviewRaw.toLowerCase().includes('approv') && !reviewRaw.toLowerCase().includes('not approv'), 
-        reasoning: reviewRaw, 
-        concerns: [] 
-      }
+  // 2. Engineer creates plan
+  console.log('[DEBUG] Calling Claude (Engineer)...')
+  const builderRaw = await callClaude(claudeKey, BUILDER_SYSTEM_PROMPT, 
+    `Blueprint from Architect:\n${archResponse}\n\nDirector's request: "${intent}"`, ctx)
+  console.log('[DEBUG] Engineer raw response:', builderRaw.substring(0, 300))
+  
+  const parsed = parseJSON(builderRaw)
+  if (!parsed.ok) {
+    console.error('[DEBUG] Failed to parse engineer response')
+    return { 
+      phase: 'escalate', 
+      architectMessage: archResponse, 
+      approved: false, 
+      finalActions: [], 
+      error: `Failed to parse engineer plan: ${parsed.error}` 
     }
+  }
+  
+  const plan = parsed.data as BuilderResponse
+  console.log('[DEBUG] Engineer plan has', plan.actions?.length || 0, 'actions')
+
+  // 3. Architect reviews
+  if (plan.actions?.length > 0) {
+    console.log('[DEBUG] Calling Gemini for review...')
+    const reviewRaw = await callGemini(geminiKey, ARCHITECT_REVIEW_PROMPT,
+      `Intent: "${intent}"\nPlan: ${JSON.stringify(plan.actions, null, 2)}`, ctx)
+    console.log('[DEBUG] Review response:', reviewRaw.substring(0, 200))
+    
+    const reviewParsed = parseJSON(reviewRaw)
+    const review: ArchitectReview = reviewParsed.ok 
+      ? reviewParsed.data 
+      : { approved: reviewRaw.toLowerCase().includes('approved'), reasoning: reviewRaw }
+
+    console.log('[DEBUG] Final result: approved=', review.approved, 'actions=', plan.actions.length)
 
     return {
       phase: 'complete',
-      architectMessage: architectResponse,
-      builderPlan,
+      architectMessage: archResponse,
+      builderPlan: plan,
       architectReview: review,
       approved: review.approved,
-      finalActions: review.approved ? builderPlan.actions : []
+      finalActions: review.approved ? plan.actions : []
     }
   }
 
-  return { phase: 'complete', architectMessage: architectResponse, builderPlan, approved: true, finalActions: [] }
+  console.log('[DEBUG] No actions in plan, returning empty')
+  return { phase: 'complete', architectMessage: archResponse, builderPlan: plan, approved: true, finalActions: [] }
 }
 
 // ============================================
-// FIX ORCHESTRATION (Self-Correction)
+// FIX ORCHESTRATION
 // ============================================
+const FIX_PROMPT = `You are the Engineering Lead. Actions failed. Diagnose and fix.
+
+Return JSON only:
+{
+  "diagnosis": "what went wrong",
+  "userFacingSummary": "brief status (no jargon)",
+  "category": "plumbing|logic|architectural",
+  "actions": [{"type":"createFile"|"runCommand", ...}],
+  "escalate": false
+}`
+
+const FIX_REVIEW = `Review this fix. Return JSON: {"approve": true/false, "escalate": false}`
+
 export async function orchestrateFix(
   claudeKey: string,
   geminiKey: string,
   intent: string,
   failures: { action: string; error: string }[],
   sessionId: string,
-  fileTree: string[],
+  files: string[],
   attempt: number,
-  silentRetry: number = 0
+  silentRetry: number
 ): Promise<OrchestrationResult> {
   
-  // Silent retry for transient errors (network glitches)
-  if (failures.every(f => isTransientError(f.error)) && silentRetry < 2) {
+  // Silent retry for transient
+  if (failures.every(f => isTransient(f.error)) && silentRetry < 2) {
     return {
       phase: 'complete',
       approved: true,
-      finalActions: failures.map(f => ({ type: 'runCommand' as ActionType, command: f.action })),
+      finalActions: failures.map(f => ({ type: 'runCommand' as const, command: f.action })),
       silentRetry: true,
       userFacingSummary: 'Retrying...'
     }
   }
 
-  // Stagnation check — same errors repeating
-  if (detectStagnation(failures.map(f => f.error))) {
+  // Stagnation
+  if (isStagnant(failures.map(f => f.error))) {
     return {
       phase: 'escalate',
       approved: false,
       finalActions: [],
-      error: 'Same errors repeating. Director guidance needed.',
       requiresDirectorInput: true,
-      userFacingSummary: 'Need guidance'
+      userFacingSummary: 'Same errors repeating'
     }
   }
 
-  const context = buildEnvironmentContext(sessionId, fileTree)
+  const ctx = buildContext(sessionId, files)
 
   // Engineer diagnoses
-  const diagnosisRaw = await callClaude(claudeKey, ENGINEER_FIX_PROMPT, `
-Original intent: "${intent}"
-Attempt: ${attempt}
-Failed actions:
-${failures.map(f => `- ${f.action}\n  Error: ${f.error}`).join('\n')}
-`, context)
-
-  const diagnosisParsed = parseJSON(diagnosisRaw)
-  if (!diagnosisParsed.ok) {
-    return { phase: 'escalate', approved: false, finalActions: [], error: 'Could not parse fix', userFacingSummary: 'Technical issue' }
+  const diagRaw = await callClaude(claudeKey, FIX_PROMPT,
+    `Intent: "${intent}"\nAttempt: ${attempt}\nFailures:\n${failures.map(f => `- ${f.action}: ${f.error}`).join('\n')}`, ctx)
+  
+  const diag = parseJSON(diagRaw)
+  if (!diag.ok) {
+    return { phase: 'escalate', approved: false, finalActions: [], userFacingSummary: 'Parse error' }
   }
 
-  const fix = diagnosisParsed.data as {
-    diagnosis: string
-    userFacingSummary?: string
-    failureCategory: string
-    actions: Action[]
-    escalate?: boolean
+  const fix = diag.data as { category: string; actions: Action[]; escalate?: boolean; userFacingSummary?: string }
+
+  if (fix.category === 'architectural' || fix.escalate) {
+    return { phase: 'escalate', approved: false, finalActions: [], requiresDirectorInput: true, userFacingSummary: fix.userFacingSummary || 'Needs guidance' }
   }
 
-  // Architectural issues need Director input
-  if (fix.failureCategory === 'architectural' || fix.escalate) {
-    return { 
-      phase: 'escalate', 
-      approved: false, 
-      finalActions: [], 
-      requiresDirectorInput: true, 
-      userFacingSummary: fix.userFacingSummary || 'Need new approach' 
-    }
-  }
-
-  // Architect reviews the fix
-  const reviewRaw = await callGemini(geminiKey, ARCHITECT_FIX_REVIEW, `
-Original intent: "${intent}"
-Attempt: ${attempt}
-Proposed fix: ${JSON.stringify(fix.actions)}
-`, context)
-
-  const reviewParsed = parseJSON(reviewRaw)
-  if (reviewParsed.ok) {
-    const review = reviewParsed.data as { approve_retry: boolean; escalate_to_director: boolean }
-    if (review.escalate_to_director || !review.approve_retry) {
-      return { phase: 'escalate', approved: false, finalActions: [], requiresDirectorInput: true, userFacingSummary: 'Need guidance' }
-    }
+  // Architect reviews fix
+  const revRaw = await callGemini(geminiKey, FIX_REVIEW, `Fix: ${JSON.stringify(fix.actions)}`, ctx)
+  const rev = parseJSON(revRaw)
+  
+  if (rev.ok && (rev.data.escalate || !rev.data.approve)) {
+    return { phase: 'escalate', approved: false, finalActions: [], requiresDirectorInput: true }
   }
 
   return {
