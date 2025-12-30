@@ -8,7 +8,7 @@ import { CommandBar } from '@/components/CommandBar'
 import { StatusIndicator, type AgentStatus } from '@/components/StatusIndicator'
 import {
   startSandboxAction, listFilesAction, orchestrateAction, executeActionsAction,
-  orchestrateFixAction, purgeDirectoryAction, fullResetAction, readFileAction
+  orchestrateFixAction, readFileAction
 } from './actions'
 import { checkOnboardingAction } from './vault-actions'
 import { Zap, LogOut, Settings } from 'lucide-react'
@@ -134,16 +134,6 @@ export default function Home() {
       return { success: false }
     }
 
-    if (fix.resetStrategy === 'purge_directory' && fix.targetPath) {
-      addTerm('system', `Cleaning ${fix.targetPath}...`)
-      await purgeDirectoryAction(sbId, fix.targetPath)
-    } else if (fix.resetStrategy === 'full_reset') {
-      const { sandboxId: newId } = await fullResetAction()
-      setSandboxId(newId); sbId = newId
-      addTerm('system', `New sandbox: ${newId}`)
-      setPreviewUrl(undefined)
-    }
-
     if (fix.approved && fix.finalActions.length) {
       return executeWithRetry(fix.finalActions, sbId, intent, attempt + 1)
     }
@@ -175,14 +165,14 @@ export default function Home() {
       // Show Architect blueprint
       if (result.architectMessage) addMsg('gemini', result.architectMessage)
 
-      // PHASE 2: Engineer proposes (SHOW THIS BEFORE APPROVAL)
+      // PHASE 2: Engineer proposes
       if (result.builderPlan?.response) {
         setAgentStatus('claude-coding')
         addTerm('system', 'Engineering Lead planning...')
         addMsg('claude', result.builderPlan.response)
       }
 
-      // PHASE 3: Architect reviews (now makes sense - reviewing visible plan)
+      // PHASE 3: Architect reviews
       if (result.architectReview) {
         setAgentStatus('gemini-auditing')
         addMsg('gemini', result.architectReview.reasoning, { approved: result.approved })
