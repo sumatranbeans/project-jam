@@ -54,7 +54,7 @@ export default function Home() {
 
   const connectSandbox = async (): Promise<string | null> => {
     setSandboxStatus('connecting')
-    addTerm('system', 'Connecting to E2B sandbox...')
+    addTerm('system', 'Connecting to CodeSandbox...')
     try {
       const { sandboxId: id } = await startSandboxAction()
       setSandboxId(id)

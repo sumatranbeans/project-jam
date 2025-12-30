@@ -7,7 +7,7 @@ import type { SandboxProvider, SandboxSession, CommandResult, PortInfo, FileInfo
 export class CodeSandboxProvider implements SandboxProvider {
   private sdk: CodeSandbox
   private sandbox: any = null  // SDK types are dynamic
-  private client: any = null
+  private client: any = null   // Connected client for commands
   private sessionId: string | null = null
 
   constructor(apiKey?: string) {
@@ -15,9 +15,12 @@ export class CodeSandboxProvider implements SandboxProvider {
   }
 
   async create(): Promise<SandboxSession> {
+    // Create sandbox
     this.sandbox = await this.sdk.sandboxes.create()
-    this.client = await this.sandbox.connect()
     this.sessionId = this.sandbox.id
+    
+    // Connect to get client for commands
+    this.client = await this.sandbox.connect()
     
     return {
       id: this.sandbox.id,
@@ -50,7 +53,9 @@ export class CodeSandboxProvider implements SandboxProvider {
     return this.sessionId
   }
 
-  // File operations
+  // ============================================
+  // File operations - use this.sandbox.fs
+  // ============================================
   async writeFile(path: string, content: string): Promise<void> {
     if (!this.sandbox) throw new Error('Sandbox not connected')
     await this.sandbox.fs.writeTextFile(path, content)
@@ -63,15 +68,26 @@ export class CodeSandboxProvider implements SandboxProvider {
 
   async listFiles(path: string = '.'): Promise<FileInfo[]> {
     if (!this.sandbox) throw new Error('Sandbox not connected')
-    const entries = await this.sandbox.fs.readdir(path)
-    return entries.map((entry: any) => ({
-      name: entry.name,
-      path: `${path}/${entry.name}`.replace('./', ''),
-      isDirectory: entry.type === 'directory'
-    }))
+    
+    try {
+      const entries = await this.sandbox.fs.readdir(path)
+      if (!entries || !Array.isArray(entries)) {
+        return []
+      }
+      return entries.map((entry: any) => ({
+        name: entry?.name || 'unknown',
+        path: `${path}/${entry?.name || 'unknown'}`.replace('./', ''),
+        isDirectory: entry?.type === 'directory'
+      }))
+    } catch (error) {
+      console.error('listFiles error:', error)
+      return []
+    }
   }
 
-  // Command execution
+  // ============================================
+  // Command execution - use this.client.commands
+  // ============================================
   async run(command: string, options?: { cwd?: string; timeout?: number }): Promise<CommandResult> {
     if (!this.client) throw new Error('Client not connected')
     
@@ -104,7 +120,9 @@ export class CodeSandboxProvider implements SandboxProvider {
     })
   }
 
-  // Port / Preview
+  // ============================================
+  // Port / Preview - use this.client.ports
+  // ============================================
   async waitForPort(port: number, timeoutMs: number = 20000): Promise<PortInfo> {
     if (!this.client) throw new Error('Client not connected')
     
