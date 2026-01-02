@@ -1,19 +1,7 @@
-'use client'
+import { auth } from '@clerk/nextjs/server'
+import { getApiKeys } from '@/lib/vault'
 
-import { useUser, SignOutButton } from '@clerk/nextjs'
-import { useRouter } from 'next/navigation'
-import { useState, useCallback, useRef, useEffect } from 'react'
-import { MessageSquare, LogOut, Settings, Send, Square, MessageCircle } from 'lucide-react'
-
-// Types
-interface Message {
-  id: string
-  role: 'user' | 'claude' | 'gemini'
-  content: string
-  thinking?: string
-  tokens?: { in: number; out: number }
-  timestamp: Date
-}
+export const runtime = 'edge'
 
 interface AgentSettings {
   verbosity: number
@@ -22,492 +10,234 @@ interface AgentSettings {
   speed: number
 }
 
-interface AgentState {
-  name: string
-  settings: AgentSettings
-  tokensIn: number
-  tokensOut: number
-  energy: number
+interface Message {
+  role: 'user' | 'claude' | 'gemini'
+  content: string
 }
 
-const defaultSettings: AgentSettings = {
-  verbosity: 2,
-  creativity: 0.7,
-  tension: 2,
-  speed: 2
-}
+// Build system prompt based on settings
+function buildSystemPrompt(agentName: string, otherAgentName: string, settings: AgentSettings): string {
+  const identity = agentName === 'Claude'
+    ? `You are Claude, a sharp, logic-first thinker. You prefer structure, code, and clarity.`
+    : `You are Gemini, a creative, expansive thinker. You prefer connections, metaphors, and broad context.`
 
-export default function LoungePage() {
-  const { user, isLoaded } = useUser()
-  const router = useRouter()
-  
-  const [messages, setMessages] = useState<Message[]>([])
-  const [input, setInput] = useState('')
-  const [isProcessing, setIsProcessing] = useState(false)
-  const [currentThinking, setCurrentThinking] = useState<{ agent: string; text: string } | null>(null)
-  const [activeAgent, setActiveAgent] = useState<string | null>(null)
-  const abortControllerRef = useRef<AbortController | null>(null)
-  const messagesEndRef = useRef<HTMLDivElement>(null)
-  
-  const [agents, setAgents] = useState<Record<string, AgentState>>({
-    claude: {
-      name: 'Claude',
-      settings: { ...defaultSettings },
-      tokensIn: 0,
-      tokensOut: 0,
-      energy: 100
-    },
-    gemini: {
-      name: 'Gemini',
-      settings: { ...defaultSettings, tension: 3 },
-      tokensIn: 0,
-      tokensOut: 0,
-      energy: 100
-    }
-  })
-
-  // Auto-scroll to bottom
-  useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [messages, currentThinking])
-
-  const updateAgentSetting = (agentId: string, key: keyof AgentSettings, value: number) => {
-    setAgents(prev => ({
-      ...prev,
-      [agentId]: {
-        ...prev[agentId],
-        settings: { ...prev[agentId].settings, [key]: value }
-      }
-    }))
+  const verbosityGuide: Record<number, string> = {
+    1: 'Respond in 1-2 sentences maximum. Be extremely concise.',
+    2: 'Respond in 2-3 sentences. Be brief but clear.',
+    3: 'Respond in 1-2 short paragraphs. Provide moderate detail.',
+    4: 'Respond in full detail with examples and explanations.'
   }
 
-  const updateAgentTokens = (agentId: string, tokensIn: number, tokensOut: number) => {
-    setAgents(prev => {
-      const agent = prev[agentId]
-      const newTotalTokens = agent.tokensIn + agent.tokensOut + tokensIn + tokensOut
-      const maxTokens = 100000 // Approximate context window
-      const newEnergy = Math.max(0, 100 - (newTotalTokens / maxTokens) * 100)
-      
-      return {
-        ...prev,
-        [agentId]: {
-          ...agent,
-          tokensIn: agent.tokensIn + tokensIn,
-          tokensOut: agent.tokensOut + tokensOut,
-          energy: newEnergy
+  const tensionGuide: Record<number, string> = {
+    1: `Be agreeable and supportive. Build on ideas with "yes, and..." approach. Find common ground with ${otherAgentName}.`,
+    2: 'Mostly agree but occasionally ask clarifying questions. Be collaborative.',
+    3: `Play devil's advocate sometimes. Question assumptions respectfully. Offer alternative viewpoints to ${otherAgentName}.`,
+    4: `Challenge everything constructively. Push back on weak arguments. Be contrarian but respectful toward ${otherAgentName}.`
+  }
+
+  const speedGuide: Record<number, string> = {
+    1: 'Take time to think through all angles. Be thorough and comprehensive.',
+    2: 'Balance depth with efficiency. Cover key points.',
+    3: 'Be efficient. Focus on the most important points only.',
+    4: 'Be very quick and direct. Skip pleasantries. Get to the point immediately.'
+  }
+
+  return `${identity}
+
+You are speaking in a shared lounge with ${otherAgentName} and a human Director.
+You have your own perspective and opinions. You engage directly with what others say.
+
+IMPORTANT: Start your response with a brief thought in brackets, like:
+[Thinking: your brief internal thought here...]
+Then provide your full response. Keep the bracketed thought under 10 words.
+Example: [Thinking: weighing simplicity vs flexibility...]
+
+CONVERSATION STYLE:
+${verbosityGuide[settings.verbosity] || verbosityGuide[2]}
+
+SOCIAL DYNAMICS:
+${tensionGuide[settings.tension] || tensionGuide[2]}
+
+PACING:
+${speedGuide[settings.speed] || speedGuide[2]}
+
+RULES:
+- Engage naturally with both the user AND ${otherAgentName}
+- Reference what ${otherAgentName} said when relevant ("I agree with ${otherAgentName} that..." or "Building on that point...")
+- Ask ${otherAgentName} direct questions sometimes
+- Don't be robotic or formal ("As per your request..." ❌)
+- Don't be sycophantic ("What a great question!" ❌)
+- Be yourself - have opinions, express uncertainty when genuine
+- If you disagree, explain why respectfully
+
+Remember: This is a conversation, not a presentation. Engage, don't lecture.`
+}
+
+function formatHistory(messages: Message[]): string {
+  if (messages.length === 0) return ''
+  return messages.map(msg => {
+    if (msg.role === 'user') return `Director: ${msg.content}`
+    if (msg.role === 'claude') return `Claude: ${msg.content}`
+    if (msg.role === 'gemini') return `Gemini: ${msg.content}`
+    return ''
+  }).join('\n\n')
+}
+
+function getMaxTokens(speed: number): number {
+  const map: Record<number, number> = { 1: 1024, 2: 512, 3: 256, 4: 128 }
+  return map[speed] || 512
+}
+
+function parseThinking(text: string): { thinking: string; content: string } {
+  const match = text.match(/^\[Thinking:\s*(.+?)\]\s*/i)
+  if (match) {
+    return {
+      thinking: match[1],
+      content: text.slice(match[0].length).trim()
+    }
+  }
+  return { thinking: '', content: text }
+}
+
+export async function POST(request: Request) {
+  try {
+    const { userId } = await auth()
+    if (!userId) {
+      return new Response(JSON.stringify({ error: 'Unauthorized' }), { status: 401 })
+    }
+
+    const keys = await getApiKeys(userId)
+    if (!keys.anthropic || !keys.google) {
+      return new Response(JSON.stringify({ error: 'API keys not configured' }), { status: 400 })
+    }
+
+    const { messages, agents } = await request.json()
+    const claudeSettings: AgentSettings = agents.claude
+    const geminiSettings: AgentSettings = agents.gemini
+
+    const history = formatHistory(messages.slice(0, -1))
+    const latestMessage = messages[messages.length - 1]
+
+    // Create a streaming response
+    const encoder = new TextEncoder()
+    const stream = new ReadableStream({
+      async start(controller) {
+        const send = (data: object) => {
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify(data)}\n\n`))
         }
+
+        try {
+          // === CLAUDE'S TURN ===
+          send({ agent: 'claude', type: 'thinking', content: 'analyzing the question...' })
+
+          const claudePrompt = history
+            ? `${history}\n\nDirector: ${latestMessage.content}\n\nRespond as Claude:`
+            : `Director: ${latestMessage.content}\n\nRespond as Claude:`
+
+          const claudeResponse = await fetch('https://api.anthropic.com/v1/messages', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'x-api-key': keys.anthropic!,
+              'anthropic-version': '2023-06-01'
+            },
+            body: JSON.stringify({
+              model: 'claude-sonnet-4-20250514',
+              max_tokens: getMaxTokens(claudeSettings.speed),
+              temperature: claudeSettings.creativity,
+              system: buildSystemPrompt('Claude', 'Gemini', claudeSettings),
+              messages: [{ role: 'user', content: claudePrompt }]
+            })
+          })
+
+          const claudeData = await claudeResponse.json()
+          const claudeText = claudeData.content?.[0]?.text || 'I had trouble formulating a response.'
+          const claudeTokens = {
+            in: claudeData.usage?.input_tokens || 0,
+            out: claudeData.usage?.output_tokens || 0
+          }
+
+          const { thinking: claudeThinking, content: claudeContent } = parseThinking(claudeText)
+
+          if (claudeThinking) {
+            send({ agent: 'claude', type: 'thinking', content: claudeThinking })
+            await new Promise(r => setTimeout(r, 800)) // Let thinking display
+          }
+
+          send({
+            agent: 'claude',
+            type: 'complete',
+            content: claudeContent,
+            thinking: claudeThinking,
+            tokens: claudeTokens
+          })
+
+          // === GEMINI'S TURN ===
+          send({ agent: 'gemini', type: 'thinking', content: 'considering Claude\'s point...' })
+
+          const geminiHistory = history
+            ? `${history}\n\nDirector: ${latestMessage.content}\n\nClaude: ${claudeContent}`
+            : `Director: ${latestMessage.content}\n\nClaude: ${claudeContent}`
+
+          const geminiPrompt = `${geminiHistory}\n\nNow respond as Gemini, engaging with both the Director's question and Claude's response:`
+
+          const geminiResponse = await fetch(
+            `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${keys.google!}`,
+            {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                contents: [{
+                  role: 'user',
+                  parts: [{ text: `${buildSystemPrompt('Gemini', 'Claude', geminiSettings)}\n\n${geminiPrompt}` }]
+                }],
+                generationConfig: {
+                  temperature: geminiSettings.creativity,
+                  maxOutputTokens: getMaxTokens(geminiSettings.speed)
+                }
+              })
+            }
+          )
+
+          const geminiData = await geminiResponse.json()
+          const geminiText = geminiData.candidates?.[0]?.content?.parts?.[0]?.text || 'I had trouble formulating a response.'
+          const geminiTokensOut = Math.ceil(geminiText.length / 4) // Estimate
+          const geminiTokens = { in: 0, out: geminiTokensOut }
+
+          const { thinking: geminiThinking, content: geminiContent } = parseThinking(geminiText)
+
+          if (geminiThinking) {
+            send({ agent: 'gemini', type: 'thinking', content: geminiThinking })
+            await new Promise(r => setTimeout(r, 800))
+          }
+
+          send({
+            agent: 'gemini',
+            type: 'complete',
+            content: geminiContent,
+            thinking: geminiThinking,
+            tokens: geminiTokens
+          })
+
+        } catch (error) {
+          console.error('Streaming error:', error)
+          send({ type: 'error', content: 'An error occurred during the conversation.' })
+        }
+
+        controller.close()
       }
     })
-  }
 
-  const addMessage = useCallback((role: Message['role'], content: string, thinking?: string, tokens?: { in: number; out: number }) => {
-    const msg: Message = {
-      id: crypto.randomUUID(),
-      role,
-      content,
-      thinking,
-      tokens,
-      timestamp: new Date()
-    }
-    setMessages(prev => [...prev, msg])
-    return msg
-  }, [])
-
-  const totalTokens = agents.claude.tokensIn + agents.claude.tokensOut + agents.gemini.tokensIn + agents.gemini.tokensOut
-
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault()
-    if (!input.trim() || isProcessing) return
-    await sendMessage(input.trim())
-  }
-
-  const handlePoke = async (agentId: string) => {
-    if (isProcessing) return
-    await sendMessage(`@${agentId} Please share your thoughts on the current discussion.`, true)
-  }
-
-  const handleHush = () => {
-    if (abortControllerRef.current) {
-      abortControllerRef.current.abort()
-      abortControllerRef.current = null
-    }
-    setIsProcessing(false)
-    setCurrentThinking(null)
-    setActiveAgent(null)
-  }
-
-  const sendMessage = async (messageText: string, isPoke = false) => {
-    setInput('')
-    setIsProcessing(true)
-    
-    if (!isPoke) {
-      addMessage('user', messageText)
-    }
-
-    abortControllerRef.current = new AbortController()
-
-    try {
-      const response = await fetch('/api/lounge/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          messages: [...messages, { role: 'user', content: messageText }],
-          agents: {
-            claude: agents.claude.settings,
-            gemini: agents.gemini.settings
-          }
-        }),
-        signal: abortControllerRef.current.signal
-      })
-
-      if (!response.ok) throw new Error('Failed to get response')
-      if (!response.body) throw new Error('No response body')
-
-      const reader = response.body.getReader()
-      const decoder = new TextDecoder()
-      
-      let claudeResponse = { content: '', thinking: '', tokens: { in: 0, out: 0 } }
-      let geminiResponse = { content: '', thinking: '', tokens: { in: 0, out: 0 } }
-
-      while (true) {
-        const { done, value } = await reader.read()
-        if (done) break
-
-        const chunk = decoder.decode(value)
-        const lines = chunk.split('\n').filter(line => line.startsWith('data: '))
-
-        for (const line of lines) {
-          try {
-            const data = JSON.parse(line.slice(6))
-            
-            if (data.type === 'thinking') {
-              setActiveAgent(data.agent)
-              setCurrentThinking({ agent: data.agent, text: data.content })
-            } else if (data.type === 'complete') {
-              setCurrentThinking(null)
-              
-              if (data.agent === 'claude') {
-                claudeResponse = {
-                  content: data.content,
-                  thinking: data.thinking || '',
-                  tokens: data.tokens || { in: 0, out: 0 }
-                }
-                addMessage('claude', claudeResponse.content, claudeResponse.thinking, claudeResponse.tokens)
-                updateAgentTokens('claude', claudeResponse.tokens.in, claudeResponse.tokens.out)
-              } else if (data.agent === 'gemini') {
-                geminiResponse = {
-                  content: data.content,
-                  thinking: data.thinking || '',
-                  tokens: data.tokens || { in: 0, out: 0 }
-                }
-                addMessage('gemini', geminiResponse.content, geminiResponse.thinking, geminiResponse.tokens)
-                updateAgentTokens('gemini', geminiResponse.tokens.in, geminiResponse.tokens.out)
-              }
-              setActiveAgent(null)
-            }
-          } catch (e) {
-            // Skip malformed JSON
-          }
-        }
+    return new Response(stream, {
+      headers: {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache',
+        'Connection': 'keep-alive'
       }
-    } catch (error) {
-      if ((error as Error).name === 'AbortError') {
-        // User pressed Hush
-      } else {
-        console.error('Chat error:', error)
-        addMessage('claude', 'Sorry, something went wrong. Please try again.')
-      }
-    } finally {
-      setIsProcessing(false)
-      setCurrentThinking(null)
-      setActiveAgent(null)
-      abortControllerRef.current = null
-    }
+    })
+
+  } catch (error) {
+    console.error('Lounge chat error:', error)
+    return new Response(JSON.stringify({ error: 'Failed to process chat' }), { status: 500 })
   }
-
-  if (!isLoaded) {
-    return <div className="min-h-screen flex items-center justify-center bg-gray-50">Loading...</div>
-  }
-
-  return (
-    <main className="flex flex-col h-screen bg-gray-50">
-      {/* Header */}
-      <header className="flex items-center justify-between px-6 py-4 border-b border-gray-200 bg-white">
-        <div className="flex items-center gap-3">
-          <div className="flex items-center justify-center w-10 h-10 rounded-lg bg-gradient-to-br from-purple-500 to-blue-500">
-            <MessageSquare className="w-5 h-5 text-white" />
-          </div>
-          <div>
-            <h1 className="text-lg font-semibold text-gray-900">Project Lounge</h1>
-            <p className="text-xs text-gray-500">Multi-agent conversation</p>
-          </div>
-        </div>
-        <div className="flex items-center gap-4">
-          <div className="text-sm text-gray-500">
-            Tokens: <span className="font-mono font-medium text-gray-900">{totalTokens.toLocaleString()}</span>
-          </div>
-          <div className="flex items-center gap-2 text-sm text-gray-600">
-            <span>{user?.firstName || user?.emailAddresses[0]?.emailAddress}</span>
-            <button onClick={() => router.push('/settings')} className="p-2 hover:bg-gray-100 rounded-lg">
-              <Settings className="w-4 h-4" />
-            </button>
-            <SignOutButton>
-              <button className="p-2 hover:bg-gray-100 rounded-lg"><LogOut className="w-4 h-4" /></button>
-            </SignOutButton>
-          </div>
-        </div>
-      </header>
-
-      {/* Main Content */}
-      <div className="flex flex-1 overflow-hidden">
-        {/* Conversation Area */}
-        <div className="flex-1 flex flex-col">
-          <div className="flex-1 overflow-y-auto p-6 space-y-4">
-            {messages.length === 0 ? (
-              <div className="flex flex-col items-center justify-center h-full text-gray-400">
-                <MessageSquare className="w-12 h-12 mb-4 opacity-50" />
-                <p className="text-lg">Start a conversation</p>
-                <p className="text-sm">Ask a question and watch the agents discuss</p>
-              </div>
-            ) : (
-              messages.map((msg) => (
-                <div key={msg.id} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                  <div className={`max-w-[80%] rounded-2xl px-4 py-3 ${
-                    msg.role === 'user'
-                      ? 'bg-blue-500 text-white'
-                      : msg.role === 'claude'
-                      ? 'bg-orange-50 text-gray-900 border border-orange-200'
-                      : 'bg-blue-50 text-gray-900 border border-blue-200'
-                  }`}>
-                    {msg.role !== 'user' && (
-                      <div className={`text-xs font-medium mb-1 flex items-center gap-2 ${
-                        msg.role === 'claude' ? 'text-orange-600' : 'text-blue-600'
-                      }`}>
-                        {msg.role === 'claude' ? 'Claude' : 'Gemini'}
-                        {msg.tokens && (
-                          <span className="opacity-60 font-normal">
-                            (↓{msg.tokens.in} ↑{msg.tokens.out})
-                          </span>
-                        )}
-                      </div>
-                    )}
-                    <div className="whitespace-pre-wrap">{msg.content}</div>
-                  </div>
-                </div>
-              ))
-            )}
-            
-            {/* Thinking Peek */}
-            {currentThinking && (
-              <div className="flex justify-start">
-                <div className={`max-w-[60%] rounded-2xl px-4 py-2 animate-pulse ${
-                  currentThinking.agent === 'claude' 
-                    ? 'bg-orange-50/60 border border-orange-100' 
-                    : 'bg-blue-50/60 border border-blue-100'
-                }`}>
-                  <div className={`text-xs font-medium mb-1 ${
-                    currentThinking.agent === 'claude' ? 'text-orange-400' : 'text-blue-400'
-                  }`}>
-                    {currentThinking.agent === 'claude' ? 'Claude' : 'Gemini'} thinking...
-                  </div>
-                  <div className="text-gray-500 italic text-sm">
-                    💭 "{currentThinking.text}"
-                  </div>
-                </div>
-              </div>
-            )}
-            
-            <div ref={messagesEndRef} />
-          </div>
-
-          {/* Input */}
-          <form onSubmit={handleSubmit} className="p-4 border-t border-gray-200 bg-white">
-            <div className="flex gap-3">
-              <input
-                type="text"
-                value={input}
-                onChange={(e) => setInput(e.target.value)}
-                placeholder="Ask something and watch the agents discuss..."
-                className="flex-1 px-4 py-3 rounded-xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                disabled={isProcessing}
-              />
-              {isProcessing ? (
-                <button
-                  type="button"
-                  onClick={handleHush}
-                  className="px-6 py-3 bg-red-500 text-white rounded-xl hover:bg-red-600 flex items-center gap-2"
-                >
-                  <Square className="w-4 h-4" />
-                  <span>Hush</span>
-                </button>
-              ) : (
-                <button
-                  type="submit"
-                  disabled={!input.trim()}
-                  className="px-6 py-3 bg-blue-500 text-white rounded-xl hover:bg-blue-600 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
-                >
-                  <Send className="w-4 h-4" />
-                </button>
-              )}
-            </div>
-          </form>
-        </div>
-
-        {/* Agent Controls Sidebar */}
-        <div className="w-80 border-l border-gray-200 bg-white overflow-y-auto">
-          <div className="p-4">
-            <h2 className="text-sm font-semibold text-gray-500 uppercase tracking-wide mb-4">Agent Controls</h2>
-            
-            {Object.entries(agents).map(([id, agent]) => (
-              <div key={id} className={`mb-6 p-4 rounded-xl border ${
-                activeAgent === id 
-                  ? id === 'claude' ? 'bg-orange-50 border-orange-200' : 'bg-blue-50 border-blue-200'
-                  : 'bg-gray-50 border-gray-100'
-              }`}>
-                {/* Header with Poke */}
-                <div className="flex items-center justify-between mb-3">
-                  <h3 className={`font-semibold ${id === 'claude' ? 'text-orange-600' : 'text-blue-600'}`}>
-                    {agent.name}
-                  </h3>
-                  <button
-                    onClick={() => handlePoke(id)}
-                    disabled={isProcessing}
-                    className={`text-xs px-2 py-1 rounded-lg flex items-center gap-1 disabled:opacity-50 ${
-                      id === 'claude' 
-                        ? 'bg-orange-100 text-orange-600 hover:bg-orange-200' 
-                        : 'bg-blue-100 text-blue-600 hover:bg-blue-200'
-                    }`}
-                  >
-                    <MessageCircle className="w-3 h-3" />
-                    Poke
-                  </button>
-                </div>
-
-                {/* Energy Bar */}
-                <div className="mb-3">
-                  <div className="flex justify-between text-xs text-gray-500 mb-1">
-                    <span>Energy</span>
-                    <span>{agent.energy.toFixed(0)}%</span>
-                  </div>
-                  <div className="h-2 bg-gray-200 rounded-full overflow-hidden">
-                    <div 
-                      className={`h-full transition-all duration-500 ${
-                        agent.energy > 50 ? 'bg-green-500' : agent.energy > 20 ? 'bg-yellow-500' : 'bg-red-500'
-                      }`}
-                      style={{ width: `${agent.energy}%` }}
-                    />
-                  </div>
-                </div>
-                
-                {/* Verbosity */}
-                <div className="mb-3">
-                  <div className="flex justify-between text-xs text-gray-500 mb-1">
-                    <span>Verbosity</span>
-                    <span>{agent.settings.verbosity}/4</span>
-                  </div>
-                  <input
-                    type="range"
-                    min="1"
-                    max="4"
-                    value={agent.settings.verbosity}
-                    onChange={(e) => updateAgentSetting(id, 'verbosity', parseInt(e.target.value))}
-                    className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-blue-500"
-                  />
-                  <div className="flex justify-between text-xs text-gray-400 mt-1">
-                    <span>Terse</span>
-                    <span>Detailed</span>
-                  </div>
-                </div>
-
-                {/* Creativity */}
-                <div className="mb-3">
-                  <div className="flex justify-between text-xs text-gray-500 mb-1">
-                    <span>Creativity</span>
-                    <span>{(agent.settings.creativity * 100).toFixed(0)}%</span>
-                  </div>
-                  <input
-                    type="range"
-                    min="0"
-                    max="100"
-                    value={agent.settings.creativity * 100}
-                    onChange={(e) => updateAgentSetting(id, 'creativity', parseInt(e.target.value) / 100)}
-                    className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-blue-500"
-                  />
-                  <div className="flex justify-between text-xs text-gray-400 mt-1">
-                    <span>Safe</span>
-                    <span>Experimental</span>
-                  </div>
-                </div>
-
-                {/* Tension */}
-                <div className="mb-3">
-                  <div className="flex justify-between text-xs text-gray-500 mb-1">
-                    <span>Social Tension</span>
-                    <span>{agent.settings.tension}/4</span>
-                  </div>
-                  <input
-                    type="range"
-                    min="1"
-                    max="4"
-                    value={agent.settings.tension}
-                    onChange={(e) => updateAgentSetting(id, 'tension', parseInt(e.target.value))}
-                    className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-blue-500"
-                  />
-                  <div className="flex justify-between text-xs text-gray-400 mt-1">
-                    <span>Agreeable</span>
-                    <span>Adversarial</span>
-                  </div>
-                </div>
-
-                {/* Speed */}
-                <div className="mb-3">
-                  <div className="flex justify-between text-xs text-gray-500 mb-1">
-                    <span>Speed</span>
-                    <span>{agent.settings.speed}/4</span>
-                  </div>
-                  <input
-                    type="range"
-                    min="1"
-                    max="4"
-                    value={agent.settings.speed}
-                    onChange={(e) => updateAgentSetting(id, 'speed', parseInt(e.target.value))}
-                    className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-blue-500"
-                  />
-                  <div className="flex justify-between text-xs text-gray-400 mt-1">
-                    <span>Thorough</span>
-                    <span>Fast</span>
-                  </div>
-                </div>
-
-                {/* Token Counts */}
-                <div className="pt-2 border-t border-gray-200 text-xs text-gray-500 font-mono">
-                  <div className="flex justify-between">
-                    <span>In:</span>
-                    <span>{agent.tokensIn.toLocaleString()}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span>Out:</span>
-                    <span>{agent.tokensOut.toLocaleString()}</span>
-                  </div>
-                  <div className="flex justify-between font-semibold text-gray-700">
-                    <span>Total:</span>
-                    <span>{(agent.tokensIn + agent.tokensOut).toLocaleString()}</span>
-                  </div>
-                </div>
-              </div>
-            ))}
-
-            {/* Scribe Panel */}
-            <div className="p-4 rounded-xl bg-gray-100 border border-gray-200">
-              <div className="flex items-center justify-between mb-2">
-                <h3 className="font-semibold text-gray-600 text-sm">📋 Scribe (Flash)</h3>
-                <span className="text-xs text-gray-400">Hidden</span>
-              </div>
-              <p className="text-xs text-gray-500">Maintaining context document...</p>
-            </div>
-          </div>
-        </div>
-      </div>
-    </main>
-  )
 }
