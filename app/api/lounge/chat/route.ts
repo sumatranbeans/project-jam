@@ -10,115 +10,106 @@ interface AgentSettings {
   speed: number
 }
 
-interface Message {
-  role: 'user' | 'claude' | 'gemini'
-  content: string
-}
-
-// Build system prompt based on settings
 function buildSystemPrompt(agentName: string, otherAgentName: string, settings: AgentSettings): string {
   const identity = agentName === 'Claude'
-    ? `You are Claude, a sharp, logic-first thinker. You prefer structure, code, and clarity.`
+    ? `You are Claude, a sharp, logic-first thinker. You prefer structure, precision, and clarity.`
     : `You are Gemini, a creative, expansive thinker. You prefer connections, metaphors, and broad context.`
 
-  const verbosityGuide: Record<number, string> = {
-    1: 'Respond in 1-2 sentences maximum. Be extremely concise.',
-    2: 'Respond in 2-3 sentences. Be brief but clear.',
-    3: 'Respond in 1-2 short paragraphs. Provide moderate detail.',
-    4: 'Respond in full detail with examples and explanations.'
+  const verbosity: Record<number, string> = {
+    1: 'Be very brief. 1-2 sentences max.',
+    2: 'Be moderate. 2-4 sentences.',
+    3: 'Be thorough. A short paragraph.'
   }
 
-  const tensionGuide: Record<number, string> = {
-    1: `Be agreeable and supportive. Build on ideas with "yes, and..." approach. Find common ground with ${otherAgentName}.`,
-    2: 'Mostly agree but occasionally ask clarifying questions. Be collaborative.',
-    3: `Play devil's advocate sometimes. Question assumptions respectfully. Offer alternative viewpoints to ${otherAgentName}.`,
-    4: `Challenge everything constructively. Push back on weak arguments. Be contrarian but respectful toward ${otherAgentName}.`
+  const creativity: Record<number, string> = {
+    1: 'Stick to facts and established knowledge.',
+    2: 'Balance facts with some creative insight.',
+    3: 'Be creative and exploratory in your thinking.'
   }
 
-  const speedGuide: Record<number, string> = {
-    1: 'Take time to think through all angles. Be thorough and comprehensive.',
-    2: 'Balance depth with efficiency. Cover key points.',
-    3: 'Be efficient. Focus on the most important points only.',
-    4: 'Be very quick and direct. Skip pleasantries. Get to the point immediately.'
+  const tension: Record<number, string> = {
+    1: `Be agreeable. Build on ${otherAgentName}'s points supportively.`,
+    2: `Be balanced. Agree when warranted, question when needed.`,
+    3: `Be challenging. Push back on ${otherAgentName}'s points constructively.`
+  }
+
+  const speed: Record<number, string> = {
+    1: 'Take time to explore all angles.',
+    2: 'Be efficient but thorough.',
+    3: 'Be quick and direct.'
   }
 
   return `${identity}
 
-You are speaking in a shared lounge with ${otherAgentName} and a human Director.
-You have your own perspective and opinions. You engage directly with what others say.
+You're in a conversation lounge with ${otherAgentName} and a human Director.
 
-IMPORTANT: Start your response with a brief thought in brackets, like:
-[Thinking: your brief internal thought here...]
-Then provide your full response. Keep the bracketed thought under 10 words.
-Example: [Thinking: weighing simplicity vs flexibility...]
+STYLE:
+- ${verbosity[settings.verbosity] || verbosity[2]}
+- ${creativity[settings.creativity] || creativity[2]}
+- ${tension[settings.tension] || tension[2]}
+- ${speed[settings.speed] || speed[2]}
 
-CONVERSATION STYLE:
-${verbosityGuide[settings.verbosity] || verbosityGuide[2]}
-
-SOCIAL DYNAMICS:
-${tensionGuide[settings.tension] || tensionGuide[2]}
-
-PACING:
-${speedGuide[settings.speed] || speedGuide[2]}
+Start with a brief thought in brackets: [Thinking: brief thought...]
 
 RULES:
-- Engage naturally with both the user AND ${otherAgentName}
-- Reference what ${otherAgentName} said when relevant ("I agree with ${otherAgentName} that..." or "Building on that point...")
-- Ask ${otherAgentName} direct questions sometimes
-- Don't be robotic or formal ("As per your request..." ❌)
-- Don't be sycophantic ("What a great question!" ❌)
-- Be yourself - have opinions, express uncertainty when genuine
-- If you disagree, explain why respectfully
-
-Remember: This is a conversation, not a presentation. Engage, don't lecture.`
-}
-
-function formatHistory(messages: Message[]): string {
-  if (messages.length === 0) return ''
-  return messages.map(msg => {
-    if (msg.role === 'user') return `Director: ${msg.content}`
-    if (msg.role === 'claude') return `Claude: ${msg.content}`
-    if (msg.role === 'gemini') return `Gemini: ${msg.content}`
-    return ''
-  }).join('\n\n')
+- Engage naturally with both the Director and ${otherAgentName}
+- Reference ${otherAgentName}'s points when relevant
+- No robotic language ("As per your request...")
+- No sycophancy ("Great question!")
+- Have genuine opinions
+- Keep responses concise`
 }
 
 function getMaxTokens(speed: number): number {
-  const map: Record<number, number> = { 1: 1024, 2: 512, 3: 256, 4: 128 }
-  return map[speed] || 512
+  return { 1: 800, 2: 400, 3: 200 }[speed] || 400
 }
 
 function parseThinking(text: string): { thinking: string; content: string } {
   const match = text.match(/^\[Thinking:\s*(.+?)\]\s*/i)
-  if (match) {
-    return {
-      thinking: match[1],
-      content: text.slice(match[0].length).trim()
-    }
-  }
+  if (match) return { thinking: match[1], content: text.slice(match[0].length).trim() }
   return { thinking: '', content: text }
+}
+
+// Generate scribe summary
+function generateScribeSummary(messages: { role: string; content: string }[]): string {
+  if (messages.length < 3) return ''
+  
+  const agentMessages = messages.filter(m => m.role === 'claude' || m.role === 'gemini')
+  if (agentMessages.length < 2) return ''
+  
+  return `**Topic:** ${messages[0]?.content?.slice(0, 50)}...\n\n**Key Points:**\n- ${agentMessages.length} agent responses\n- Discussion ongoing`
 }
 
 export async function POST(request: Request) {
   try {
     const { userId } = await auth()
-    if (!userId) {
-      return new Response(JSON.stringify({ error: 'Unauthorized' }), { status: 401 })
-    }
+    if (!userId) return new Response(JSON.stringify({ error: 'Unauthorized' }), { status: 401 })
 
     const keys = await getApiKeys(userId)
     if (!keys.anthropic || !keys.google) {
       return new Response(JSON.stringify({ error: 'API keys not configured' }), { status: 400 })
     }
 
-    const { messages, agents } = await request.json()
+    const { messages, agents, bias = 0 } = await request.json()
     const claudeSettings: AgentSettings = agents.claude
     const geminiSettings: AgentSettings = agents.gemini
 
-    const history = formatHistory(messages.slice(0, -1))
+    // Format history
+    const history = messages.slice(0, -1).map((m: any) => {
+      if (m.role === 'user') return `Director: ${m.content}`
+      if (m.role === 'claude') return `Claude: ${m.content}`
+      if (m.role === 'gemini') return `Gemini: ${m.content}`
+      return ''
+    }).join('\n\n')
+    
     const latestMessage = messages[messages.length - 1]
 
-    // Create a streaming response
+    // Randomize who goes first (bias affects probability)
+    // bias: -1 = Claude first, 0 = random, 1 = Gemini first
+    const random = Math.random()
+    const claudeFirstThreshold = bias === -1 ? 0.8 : bias === 1 ? 0.2 : 0.5
+    const claudeFirst = random < claudeFirstThreshold
+
     const encoder = new TextEncoder()
     const stream = new ReadableStream({
       async start(controller) {
@@ -127,101 +118,158 @@ export async function POST(request: Request) {
         }
 
         try {
-          // === CLAUDE'S TURN ===
-          send({ agent: 'claude', type: 'thinking', content: 'analyzing the question...' })
+          const firstAgent = claudeFirst ? 'claude' : 'gemini'
+          const secondAgent = claudeFirst ? 'gemini' : 'claude'
 
-          const claudePrompt = history
-            ? `${history}\n\nDirector: ${latestMessage.content}\n\nRespond as Claude:`
-            : `Director: ${latestMessage.content}\n\nRespond as Claude:`
+          // === FIRST AGENT ===
+          send({ agent: firstAgent, type: 'thinking', content: 'considering...' })
 
-          const claudeResponse = await fetch('https://api.anthropic.com/v1/messages', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'x-api-key': keys.anthropic!,
-              'anthropic-version': '2023-06-01'
-            },
-            body: JSON.stringify({
-              model: 'claude-sonnet-4-20250514',
-              max_tokens: getMaxTokens(claudeSettings.speed),
-              temperature: claudeSettings.creativity,
-              system: buildSystemPrompt('Claude', 'Gemini', claudeSettings),
-              messages: [{ role: 'user', content: claudePrompt }]
-            })
-          })
+          let firstResponse: { content: string; thinking: string; tokens: { in: number; out: number } }
 
-          const claudeData = await claudeResponse.json()
-          const claudeText = claudeData.content?.[0]?.text || 'I had trouble formulating a response.'
-          const claudeTokens = {
-            in: claudeData.usage?.input_tokens || 0,
-            out: claudeData.usage?.output_tokens || 0
-          }
+          if (firstAgent === 'claude') {
+            const prompt = history
+              ? `${history}\n\nDirector: ${latestMessage.content}\n\nRespond as Claude:`
+              : `Director: ${latestMessage.content}\n\nRespond as Claude:`
 
-          const { thinking: claudeThinking, content: claudeContent } = parseThinking(claudeText)
-
-          if (claudeThinking) {
-            send({ agent: 'claude', type: 'thinking', content: claudeThinking })
-            await new Promise(r => setTimeout(r, 800)) // Let thinking display
-          }
-
-          send({
-            agent: 'claude',
-            type: 'complete',
-            content: claudeContent,
-            thinking: claudeThinking,
-            tokens: claudeTokens
-          })
-
-          // === GEMINI'S TURN ===
-          send({ agent: 'gemini', type: 'thinking', content: 'considering Claude\'s point...' })
-
-          const geminiHistory = history
-            ? `${history}\n\nDirector: ${latestMessage.content}\n\nClaude: ${claudeContent}`
-            : `Director: ${latestMessage.content}\n\nClaude: ${claudeContent}`
-
-          const geminiPrompt = `${geminiHistory}\n\nNow respond as Gemini, engaging with both the Director's question and Claude's response:`
-
-          const geminiResponse = await fetch(
-            `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${keys.google!}`,
-            {
+            const response = await fetch('https://api.anthropic.com/v1/messages', {
               method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
+              headers: {
+                'Content-Type': 'application/json',
+                'x-api-key': keys.anthropic!,
+                'anthropic-version': '2023-06-01'
+              },
               body: JSON.stringify({
-                contents: [{
-                  role: 'user',
-                  parts: [{ text: `${buildSystemPrompt('Gemini', 'Claude', geminiSettings)}\n\n${geminiPrompt}` }]
-                }],
-                generationConfig: {
-                  temperature: geminiSettings.creativity,
-                  maxOutputTokens: getMaxTokens(geminiSettings.speed)
-                }
+                model: 'claude-sonnet-4-20250514',
+                max_tokens: getMaxTokens(claudeSettings.speed),
+                temperature: claudeSettings.creativity === 1 ? 0.3 : claudeSettings.creativity === 2 ? 0.6 : 0.9,
+                system: buildSystemPrompt('Claude', 'Gemini', claudeSettings),
+                messages: [{ role: 'user', content: prompt }]
               })
+            })
+
+            const data = await response.json()
+            const text = data.content?.[0]?.text || ''
+            const { thinking, content } = parseThinking(text)
+            firstResponse = {
+              content,
+              thinking,
+              tokens: { in: data.usage?.input_tokens || 0, out: data.usage?.output_tokens || 0 }
             }
-          )
+          } else {
+            const prompt = history
+              ? `${history}\n\nDirector: ${latestMessage.content}\n\nRespond as Gemini:`
+              : `Director: ${latestMessage.content}\n\nRespond as Gemini:`
 
-          const geminiData = await geminiResponse.json()
-          const geminiText = geminiData.candidates?.[0]?.content?.parts?.[0]?.text || 'I had trouble formulating a response.'
-          const geminiTokensOut = Math.ceil(geminiText.length / 4) // Estimate
-          const geminiTokens = { in: 0, out: geminiTokensOut }
+            const response = await fetch(
+              `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${keys.google!}`,
+              {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  contents: [{ role: 'user', parts: [{ text: `${buildSystemPrompt('Gemini', 'Claude', geminiSettings)}\n\n${prompt}` }] }],
+                  generationConfig: {
+                    temperature: geminiSettings.creativity === 1 ? 0.3 : geminiSettings.creativity === 2 ? 0.6 : 0.9,
+                    maxOutputTokens: getMaxTokens(geminiSettings.speed)
+                  }
+                })
+              }
+            )
 
-          const { thinking: geminiThinking, content: geminiContent } = parseThinking(geminiText)
-
-          if (geminiThinking) {
-            send({ agent: 'gemini', type: 'thinking', content: geminiThinking })
-            await new Promise(r => setTimeout(r, 800))
+            const data = await response.json()
+            const text = data.candidates?.[0]?.content?.parts?.[0]?.text || ''
+            const { thinking, content } = parseThinking(text)
+            // Estimate tokens for Gemini
+            const inputTokens = Math.ceil(prompt.length / 4)
+            const outputTokens = Math.ceil(text.length / 4)
+            firstResponse = { content, thinking, tokens: { in: inputTokens, out: outputTokens } }
           }
 
-          send({
-            agent: 'gemini',
-            type: 'complete',
-            content: geminiContent,
-            thinking: geminiThinking,
-            tokens: geminiTokens
-          })
+          if (firstResponse.thinking) {
+            send({ agent: firstAgent, type: 'thinking', content: firstResponse.thinking })
+            await new Promise(r => setTimeout(r, 600))
+          }
+          send({ agent: firstAgent, type: 'complete', ...firstResponse })
+
+          // === SECOND AGENT ===
+          send({ agent: secondAgent, type: 'thinking', content: 'reflecting on that...' })
+
+          const updatedHistory = history
+            ? `${history}\n\nDirector: ${latestMessage.content}\n\n${firstAgent === 'claude' ? 'Claude' : 'Gemini'}: ${firstResponse.content}`
+            : `Director: ${latestMessage.content}\n\n${firstAgent === 'claude' ? 'Claude' : 'Gemini'}: ${firstResponse.content}`
+
+          let secondResponse: { content: string; thinking: string; tokens: { in: number; out: number } }
+
+          if (secondAgent === 'claude') {
+            const prompt = `${updatedHistory}\n\nRespond as Claude, engaging with both the Director and Gemini:`
+
+            const response = await fetch('https://api.anthropic.com/v1/messages', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'x-api-key': keys.anthropic!,
+                'anthropic-version': '2023-06-01'
+              },
+              body: JSON.stringify({
+                model: 'claude-sonnet-4-20250514',
+                max_tokens: getMaxTokens(claudeSettings.speed),
+                temperature: claudeSettings.creativity === 1 ? 0.3 : claudeSettings.creativity === 2 ? 0.6 : 0.9,
+                system: buildSystemPrompt('Claude', 'Gemini', claudeSettings),
+                messages: [{ role: 'user', content: prompt }]
+              })
+            })
+
+            const data = await response.json()
+            const text = data.content?.[0]?.text || ''
+            const { thinking, content } = parseThinking(text)
+            secondResponse = {
+              content,
+              thinking,
+              tokens: { in: data.usage?.input_tokens || 0, out: data.usage?.output_tokens || 0 }
+            }
+          } else {
+            const prompt = `${updatedHistory}\n\nRespond as Gemini, engaging with both the Director and Claude:`
+
+            const response = await fetch(
+              `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${keys.google!}`,
+              {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  contents: [{ role: 'user', parts: [{ text: `${buildSystemPrompt('Gemini', 'Claude', geminiSettings)}\n\n${prompt}` }] }],
+                  generationConfig: {
+                    temperature: geminiSettings.creativity === 1 ? 0.3 : geminiSettings.creativity === 2 ? 0.6 : 0.9,
+                    maxOutputTokens: getMaxTokens(geminiSettings.speed)
+                  }
+                })
+              }
+            )
+
+            const data = await response.json()
+            const text = data.candidates?.[0]?.content?.parts?.[0]?.text || ''
+            const { thinking, content } = parseThinking(text)
+            const inputTokens = Math.ceil(prompt.length / 4)
+            const outputTokens = Math.ceil(text.length / 4)
+            secondResponse = { content, thinking, tokens: { in: inputTokens, out: outputTokens } }
+          }
+
+          if (secondResponse.thinking) {
+            send({ agent: secondAgent, type: 'thinking', content: secondResponse.thinking })
+            await new Promise(r => setTimeout(r, 600))
+          }
+          send({ agent: secondAgent, type: 'complete', ...secondResponse })
+
+          // === SCRIBE NOTES ===
+          const scribeSummary = generateScribeSummary([...messages, 
+            { role: firstAgent, content: firstResponse.content },
+            { role: secondAgent, content: secondResponse.content }
+          ])
+          if (scribeSummary) {
+            send({ type: 'scribe', content: scribeSummary })
+          }
 
         } catch (error) {
-          console.error('Streaming error:', error)
-          send({ type: 'error', content: 'An error occurred during the conversation.' })
+          console.error('Stream error:', error)
+          send({ type: 'error', content: 'An error occurred.' })
         }
 
         controller.close()
@@ -229,15 +277,11 @@ export async function POST(request: Request) {
     })
 
     return new Response(stream, {
-      headers: {
-        'Content-Type': 'text/event-stream',
-        'Cache-Control': 'no-cache',
-        'Connection': 'keep-alive'
-      }
+      headers: { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'Connection': 'keep-alive' }
     })
 
   } catch (error) {
-    console.error('Lounge chat error:', error)
-    return new Response(JSON.stringify({ error: 'Failed to process chat' }), { status: 500 })
+    console.error('Chat error:', error)
+    return new Response(JSON.stringify({ error: 'Failed' }), { status: 500 })
   }
 }
