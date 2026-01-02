@@ -138,7 +138,7 @@ export async function POST(request: Request) {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',
-              'x-api-key': keys.anthropic,
+              'x-api-key': keys.anthropic!,
               'anthropic-version': '2023-06-01'
             },
             body: JSON.stringify({
@@ -182,7 +182,7 @@ export async function POST(request: Request) {
           const geminiPrompt = `${geminiHistory}\n\nNow respond as Gemini, engaging with both the Director's question and Claude's response:`
 
           const geminiResponse = await fetch(
-            `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${keys.google}`,
+            `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${keys.google!}`,
             {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
