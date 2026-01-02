@@ -429,26 +429,27 @@ export default function LoungePage() {
               const newTokensOut = (data.tokens?.out || 0)
               
               setAgents(prev => {
+                const agentKey = data.agent as 'claude' | 'gemini'
                 const updated = {
                   ...prev,
-                  [data.agent]: {
-                    ...prev[data.agent],
-                    tokensIn: prev[data.agent].tokensIn + newTokensIn,
-                    tokensOut: prev[data.agent].tokensOut + newTokensOut,
+                  [agentKey]: {
+                    ...prev[agentKey],
+                    tokensIn: prev[agentKey].tokensIn + newTokensIn,
+                    tokensOut: prev[agentKey].tokensOut + newTokensOut,
                     isRefreshed: false
                   }
                 }
                 
                 // Check energy and create checkpoint if needed
                 const newEnergy = getEnergy(
-                  updated[data.agent].tokensIn,
-                  updated[data.agent].tokensOut,
-                  data.agent as 'claude' | 'gemini'
+                  updated[agentKey].tokensIn,
+                  updated[agentKey].tokensOut,
+                  agentKey
                 )
                 
-                const needsRefresh = checkForCheckpoint(data.agent, newEnergy)
+                const needsRefresh = checkForCheckpoint(agentKey, newEnergy)
                 if (needsRefresh) {
-                  setTimeout(() => refreshAgent(data.agent), 500)
+                  setTimeout(() => refreshAgent(agentKey), 500)
                 }
                 
                 return updated
