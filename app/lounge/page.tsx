@@ -5,8 +5,9 @@ import { useRouter } from 'next/navigation'
 import { useState, useCallback, useRef, useEffect } from 'react'
 import { 
   MessageSquare, LogOut, Settings, Send, Square, MessageCircle,
-  Copy, ThumbsUp, ThumbsDown, Plus, Clock, ChevronDown, ChevronUp, Check, RefreshCw,
-  Paperclip, X, Image as ImageIcon, FileText
+  Copy, ThumbsUp, ThumbsDown, Plus, Clock, ChevronDown, ChevronUp, Check,
+  Paperclip, X, FileText, ExternalLink, RotateCcw, DollarSign, Share2,
+  PanelLeftClose, PanelLeft, Monitor, Smartphone, BarChart3
 } from 'lucide-react'
 
 // Types
@@ -23,8 +24,11 @@ interface Message {
   role: 'user' | 'claude' | 'gemini' | 'system'
   content: string
   thinking?: string
+  model?: string
+  modelId?: string
   tokensIn?: number
   tokensOut?: number
+  cost?: number
   timestamp: Date
   feedback?: 'up' | 'down'
   attachments?: Attachment[]
@@ -35,12 +39,47 @@ interface ScribeNote {
   content: string
 }
 
+interface Session {
+  id: string
+  startedAt: Date
+  endedAt?: Date
+  messageCount: number
+  claudeCost: number
+  geminiCost: number
+  totalCost: number
+}
+
+interface ConversationStats {
+  totalMessages: number
+  userMessages: number
+  claudeMessages: number
+  geminiMessages: number
+  claudeTokensIn: number
+  claudeTokensOut: number
+  geminiTokensIn: number
+  geminiTokensOut: number
+  claudeCost: number
+  geminiCost: number
+  totalCost: number
+  totalDuration: number
+  sessions: Session[]
+  modelsUsed: string[]
+  deviceType: 'desktop' | 'mobile'
+  firstMessageAt?: Date
+  lastMessageAt?: Date
+}
+
 interface Conversation {
   id: string
   title: string
   messages: Message[]
   scribeNotes: ScribeNote[]
+  stats?: ConversationStats
+  sessions: Session[]
+  currentSessionId?: string
+  isEnded: boolean
   createdAt: Date
+  endedAt?: Date
 }
 
 interface AgentSettings {
@@ -55,11 +94,18 @@ interface AgentState {
   settings: AgentSettings
   tokensIn: number
   tokensOut: number
+  cost: number
   isRefreshed: boolean
   refreshCount: number
 }
 
 const defaultSettings: AgentSettings = { verbosity: 2, creativity: 2, tension: 2, speed: 2 }
+
+// Detect device type
+function getDeviceType(): 'desktop' | 'mobile' {
+  if (typeof window === 'undefined') return 'desktop'
+  return window.innerWidth < 768 ? 'mobile' : 'desktop'
+}
 
 // Claude Logo
 function ClaudeLogo({ className }: { className?: string }) {
@@ -108,16 +154,13 @@ function ThreePointSlider({ value, onChange, labels, color = 'gray' }: {
             style={{ left: v === 1 ? '0%' : v === 2 ? 'calc(50% - 5px)' : 'calc(100% - 10px)' }} />
         ))}
       </div>
-      <div className="flex justify-between text-[8px] text-gray-400 -mt-0.5">
-        {labels.map((l, i) => <span key={i}>{l}</span>)}
-      </div>
+      <div className="flex justify-between text-[8px] text-gray-400 -mt-0.5">{labels.map((l, i) => <span key={i}>{l}</span>)}</div>
     </div>
   )
 }
 
 // 5-point priority selector
 function AgentPrioritySelector({ value, onChange }: { value: number; onChange: (v: number) => void }) {
-  const labels = ['Claude Only', 'Claude+', 'Neutral', 'Gemini+', 'Gemini Only']
   return (
     <div className="w-full">
       <div className="relative h-5 flex items-center">
@@ -128,78 +171,163 @@ function AgentPrioritySelector({ value, onChange }: { value: number; onChange: (
         ))}
       </div>
       <div className="flex justify-between text-[7px] text-gray-400 -mt-0.5">
-        <span className="text-orange-500">Only</span>
-        <span className="text-orange-400">+</span>
-        <span>Both</span>
-        <span className="text-blue-400">+</span>
-        <span className="text-blue-500">Only</span>
+        <span className="text-orange-500">Only</span><span className="text-orange-400">+</span><span>Both</span><span className="text-blue-400">+</span><span className="text-blue-500">Only</span>
       </div>
     </div>
   )
 }
 
-// Markdown-ish rendering with tables
+// Code block
+function CodeBlock({ code, language }: { code: string; language?: string }) {
+  const [copied, setCopied] = useState(false)
+  const handleCopy = () => { navigator.clipboard.writeText(code); setCopied(true); setTimeout(() => setCopied(false), 2000) }
+  return (
+    <div className="relative my-2 rounded-lg overflow-hidden bg-gray-900 text-gray-100">
+      <div className="flex justify-between items-center px-3 py-1 bg-gray-800 text-[10px]">
+        <span className="text-gray-400">{language || 'code'}</span>
+        <button onClick={handleCopy} className="flex items-center gap-1 text-gray-400 hover:text-white">
+          {copied ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}{copied ? 'Copied' : 'Copy'}
+        </button>
+      </div>
+      <pre className="p-3 overflow-x-auto text-[11px] leading-relaxed"><code>{code}</code></pre>
+    </div>
+  )
+}
+
+// Rich text
 function FormattedText({ content }: { content: string }) {
-  // Check for table
-  if (content.includes('|') && content.includes('---')) {
-    const lines = content.split('\n')
-    const tableLines: string[] = []
-    const otherLines: string[] = []
-    let inTable = false
-    
-    for (const line of lines) {
-      if (line.includes('|')) {
-        inTable = true
-        tableLines.push(line)
-      } else if (inTable && line.trim() === '') {
-        inTable = false
-      } else {
-        otherLines.push(line)
-      }
+  const elements: React.ReactNode[] = []
+  let remaining = content, key = 0
+  while (remaining.length > 0) {
+    const codeBlockMatch = remaining.match(/^```(\w*)\n?([\s\S]*?)```/)
+    if (codeBlockMatch) { elements.push(<CodeBlock key={key++} code={codeBlockMatch[2].trim()} language={codeBlockMatch[1]} />); remaining = remaining.slice(codeBlockMatch[0].length); continue }
+    const tableMatch = remaining.match(/^(\|[^\n]+\|\n\|[-:\s|]+\|\n(?:\|[^\n]+\|\n?)+)/)
+    if (tableMatch) {
+      const lines = tableMatch[1].trim().split('\n'), headers = lines[0].split('|').filter(c => c.trim()), rows = lines.slice(2).map(row => row.split('|').filter(c => c.trim()))
+      elements.push(<table key={key++} className="text-[10px] border-collapse w-full my-2"><thead><tr className="bg-gray-100">{headers.map((h, i) => <th key={i} className="border border-gray-200 px-2 py-1 text-left font-medium">{h.trim()}</th>)}</tr></thead><tbody>{rows.map((row, i) => <tr key={i} className={i % 2 === 0 ? '' : 'bg-gray-50'}>{row.map((cell, j) => <td key={j} className="border border-gray-200 px-2 py-1">{cell.trim()}</td>)}</tr>)}</tbody></table>)
+      remaining = remaining.slice(tableMatch[0].length); continue
     }
-    
-    if (tableLines.length > 2) {
-      const headers = tableLines[0].split('|').filter(c => c.trim())
-      const rows = tableLines.slice(2).map(row => row.split('|').filter(c => c.trim()))
-      
-      return (
-        <div>
-          {otherLines.length > 0 && <p className="mb-2">{renderInlineFormatting(otherLines.join('\n'))}</p>}
-          <table className="text-[10px] border-collapse w-full my-2">
-            <thead>
-              <tr className="bg-gray-100">
-                {headers.map((h, i) => <th key={i} className="border border-gray-200 px-2 py-1 text-left font-medium">{h.trim()}</th>)}
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((row, i) => (
-                <tr key={i} className={i % 2 === 0 ? '' : 'bg-gray-50'}>
-                  {row.map((cell, j) => <td key={j} className="border border-gray-200 px-2 py-1">{cell.trim()}</td>)}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )
-    }
+    const nextCode = remaining.indexOf('```'), nextTable = remaining.search(/\n\|[^\n]+\|/)
+    let nextBreak = remaining.length
+    if (nextCode !== -1 && nextCode < nextBreak) nextBreak = nextCode
+    if (nextTable !== -1 && nextTable < nextBreak) nextBreak = nextTable + 1
+    const textChunk = remaining.slice(0, nextBreak)
+    if (textChunk) elements.push(<span key={key++}>{renderInlineFormatting(textChunk)}</span>)
+    remaining = remaining.slice(nextBreak)
   }
-  
-  return <span>{renderInlineFormatting(content)}</span>
+  return <>{elements}</>
 }
 
-function renderInlineFormatting(text: string) {
-  const parts = text.split(/(\*\*[^*]+\*\*|\*[^*]+\*|`[^`]+`)/g)
-  return parts.map((part, i) => {
+function renderInlineFormatting(text: string): React.ReactNode[] {
+  return text.split(/(\*\*[^*]+\*\*|\*[^*]+\*|`[^`]+`|\[([^\]]+)\]\(([^)]+)\))/g).map((part, i) => {
+    if (!part) return null
     if (part.startsWith('**') && part.endsWith('**')) return <strong key={i} className="font-semibold">{part.slice(2, -2)}</strong>
-    if (part.startsWith('*') && part.endsWith('*')) return <em key={i}>{part.slice(1, -1)}</em>
-    if (part.startsWith('`') && part.endsWith('`')) return <code key={i} className="bg-gray-100 px-0.5 rounded text-[10px]">{part.slice(1, -1)}</code>
+    if (part.startsWith('*') && part.endsWith('*') && !part.startsWith('**')) return <em key={i}>{part.slice(1, -1)}</em>
+    if (part.startsWith('`') && part.endsWith('`')) return <code key={i} className="bg-gray-100 px-1 rounded text-[10px] font-mono">{part.slice(1, -1)}</code>
+    const linkMatch = part.match(/\[([^\]]+)\]\(([^)]+)\)/)
+    if (linkMatch) return <a key={i} href={linkMatch[2]} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline inline-flex items-center gap-0.5">{linkMatch[1]}<ExternalLink className="w-2.5 h-2.5" /></a>
     return part
-  })
+  }).filter(Boolean)
 }
 
-function formatTime(date: Date): string {
-  return date.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true })
+function formatTime(date: Date): string { return date.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true }) }
+function formatDuration(minutes: number): string { return minutes < 60 ? `${minutes}m` : `${Math.floor(minutes / 60)}h ${minutes % 60}m` }
+function formatCost(cost: number): string { return cost < 0.001 ? '<$0.001' : cost < 0.01 ? `$${cost.toFixed(4)}` : `$${cost.toFixed(3)}` }
+
+// Stats for Nerds Modal
+function StatsModal({ stats, onClose }: { stats: ConversationStats; onClose: () => void }) {
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={onClose}>
+      <div className="bg-white rounded-xl p-4 max-w-md w-full mx-4 max-h-[80vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="font-semibold flex items-center gap-2"><BarChart3 className="w-4 h-4" /> Stats for Nerds</h3>
+          <button onClick={onClose} className="p-1 hover:bg-gray-100 rounded"><X className="w-4 h-4" /></button>
+        </div>
+        
+        <div className="space-y-4 text-xs">
+          {/* Overview */}
+          <div className="bg-gray-50 rounded-lg p-3">
+            <div className="font-medium text-gray-700 mb-2">Overview</div>
+            <div className="grid grid-cols-2 gap-2 text-gray-600">
+              <div>Total Messages: <span className="font-medium text-gray-900">{stats.totalMessages}</span></div>
+              <div>Sessions: <span className="font-medium text-gray-900">{stats.sessions.length}</span></div>
+              <div>Total Time: <span className="font-medium text-gray-900">{formatDuration(stats.totalDuration)}</span></div>
+              <div className="flex items-center gap-1">Device: {stats.deviceType === 'desktop' ? <Monitor className="w-3 h-3" /> : <Smartphone className="w-3 h-3" />}<span className="font-medium text-gray-900">{stats.deviceType}</span></div>
+            </div>
+          </div>
+          
+          {/* Cost Breakdown */}
+          <div className="bg-green-50 rounded-lg p-3">
+            <div className="font-medium text-green-700 mb-2">Cost Breakdown</div>
+            <div className="space-y-1 text-gray-600">
+              <div className="flex justify-between">
+                <span>Total Cost:</span>
+                <span className="font-bold text-green-700">{formatCost(stats.totalCost)}</span>
+              </div>
+              <div className="flex justify-between text-[10px]">
+                <span className="text-orange-600">Claude:</span>
+                <span>{formatCost(stats.claudeCost)} ({stats.claudeTokensIn.toLocaleString()}↓ {stats.claudeTokensOut.toLocaleString()}↑)</span>
+              </div>
+              <div className="flex justify-between text-[10px]">
+                <span className="text-blue-600">Gemini:</span>
+                <span>{formatCost(stats.geminiCost)} ({stats.geminiTokensIn.toLocaleString()}↓ {stats.geminiTokensOut.toLocaleString()}↑)</span>
+              </div>
+            </div>
+          </div>
+          
+          {/* Message Distribution */}
+          <div className="bg-gray-50 rounded-lg p-3">
+            <div className="font-medium text-gray-700 mb-2">Messages</div>
+            <div className="flex gap-2">
+              <div className="flex-1 bg-gray-200 rounded p-2 text-center">
+                <div className="text-lg font-bold">{stats.userMessages}</div>
+                <div className="text-[10px] text-gray-500">You</div>
+              </div>
+              <div className="flex-1 bg-orange-100 rounded p-2 text-center">
+                <div className="text-lg font-bold text-orange-600">{stats.claudeMessages}</div>
+                <div className="text-[10px] text-orange-500">Claude</div>
+              </div>
+              <div className="flex-1 bg-blue-100 rounded p-2 text-center">
+                <div className="text-lg font-bold text-blue-600">{stats.geminiMessages}</div>
+                <div className="text-[10px] text-blue-500">Gemini</div>
+              </div>
+            </div>
+          </div>
+          
+          {/* Models Used */}
+          {stats.modelsUsed.length > 0 && (
+            <div className="bg-purple-50 rounded-lg p-3">
+              <div className="font-medium text-purple-700 mb-2">Models Used</div>
+              <div className="flex flex-wrap gap-1">
+                {stats.modelsUsed.map((model, i) => (
+                  <span key={i} className="px-2 py-0.5 bg-purple-100 text-purple-700 rounded text-[10px]">{model}</span>
+                ))}
+              </div>
+            </div>
+          )}
+          
+          {/* Sessions */}
+          {stats.sessions.length > 0 && (
+            <div className="bg-gray-50 rounded-lg p-3">
+              <div className="font-medium text-gray-700 mb-2">Session History</div>
+              <div className="space-y-1 text-[10px]">
+                {stats.sessions.map((session, i) => (
+                  <div key={session.id} className="flex justify-between text-gray-600 py-1 border-b border-gray-100 last:border-0">
+                    <span>Session {i + 1}</span>
+                    <span>{session.messageCount} msgs • {formatCost(session.totalCost)}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  )
 }
+
+const STORAGE_KEY = 'lounge-data-v6'
+const SCRIBE_MODEL = 'Gemini 3 Flash'
 
 export default function LoungePage() {
   const { user, isLoaded } = useUser()
@@ -218,14 +346,20 @@ export default function LoungePage() {
   const [showScribe, setShowScribe] = useState(true)
   const [agentPriority, setAgentPriority] = useState(0)
   const [copiedId, setCopiedId] = useState<string | null>(null)
+  const [scribeCopied, setScribeCopied] = useState(false)
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
+  const [showStats, setShowStats] = useState(false)
+  const [isConversationEnded, setIsConversationEnded] = useState(false)
+  const [currentSessionId, setCurrentSessionId] = useState<string | null>(null)
+  const [sessionStartTime, setSessionStartTime] = useState<Date | null>(null)
   
   const fileInputRef = useRef<HTMLInputElement>(null)
   const abortControllerRef = useRef<AbortController | null>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   
   const [agents, setAgents] = useState<Record<string, AgentState>>({
-    claude: { name: 'Claude', settings: { ...defaultSettings }, tokensIn: 0, tokensOut: 0, isRefreshed: false, refreshCount: 0 },
-    gemini: { name: 'Gemini', settings: { ...defaultSettings }, tokensIn: 0, tokensOut: 0, isRefreshed: false, refreshCount: 0 }
+    claude: { name: 'Claude', settings: { ...defaultSettings }, tokensIn: 0, tokensOut: 0, cost: 0, isRefreshed: false, refreshCount: 0 },
+    gemini: { name: 'Gemini', settings: { ...defaultSettings }, tokensIn: 0, tokensOut: 0, cost: 0, isRefreshed: false, refreshCount: 0 }
   })
 
   const getEnergy = (tokensIn: number, tokensOut: number, model: 'claude' | 'gemini') => {
@@ -233,104 +367,241 @@ export default function LoungePage() {
     return Math.max(0, 100 - ((tokensIn + tokensOut) / contextWindow) * 100)
   }
 
-  useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [messages, currentThinking])
+  useEffect(() => { messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [messages, currentThinking])
 
-  // Load/save conversations
+  // Load data
   useEffect(() => {
-    const saved = localStorage.getItem('lounge-conversations-v3')
+    if (!user?.id) return
+    const saved = localStorage.getItem(`${STORAGE_KEY}-${user.id}`)
     if (saved) {
       try {
-        const parsed = JSON.parse(saved)
-        setConversations(parsed.map((c: any) => ({
+        const data = JSON.parse(saved)
+        const convs = data.conversations?.map((c: any) => ({
           ...c,
           createdAt: new Date(c.createdAt),
+          endedAt: c.endedAt ? new Date(c.endedAt) : undefined,
           messages: c.messages.map((m: any) => ({ ...m, timestamp: new Date(m.timestamp) })),
-          scribeNotes: (c.scribeNotes || []).map((n: any) => ({ ...n, timestamp: new Date(n.timestamp) }))
-        })))
-      } catch {}
+          scribeNotes: (c.scribeNotes || []).map((n: any) => ({ ...n, timestamp: new Date(n.timestamp) })),
+          sessions: (c.sessions || []).map((s: any) => ({ ...s, startedAt: new Date(s.startedAt), endedAt: s.endedAt ? new Date(s.endedAt) : undefined }))
+        })) || []
+        setConversations(convs)
+        if (data.activeConversationId) {
+          const active = convs.find((c: Conversation) => c.id === data.activeConversationId)
+          if (active) {
+            setActiveConversationId(active.id)
+            setMessages(active.messages)
+            setScribeNotes(active.scribeNotes || [])
+            setIsConversationEnded(active.isEnded || false)
+          }
+        }
+      } catch (e) { console.error('Load error:', e) }
     }
-  }, [])
+  }, [user?.id])
 
+  // Save data
   useEffect(() => {
-    if (conversations.length > 0) {
-      localStorage.setItem('lounge-conversations-v3', JSON.stringify(conversations))
+    if (!user?.id || conversations.length === 0) return
+    localStorage.setItem(`${STORAGE_KEY}-${user.id}`, JSON.stringify({ conversations, activeConversationId }))
+  }, [conversations, activeConversationId, user?.id])
+
+  // Sync to active conversation
+  useEffect(() => {
+    if (!activeConversationId) return
+    setConversations(prev => prev.map(c => c.id === activeConversationId ? { ...c, messages, scribeNotes, isEnded: isConversationEnded } : c))
+  }, [messages, scribeNotes, activeConversationId, isConversationEnded])
+
+  const calculateStats = useCallback((): ConversationStats => {
+    const claudeMsgs = messages.filter(m => m.role === 'claude')
+    const geminiMsgs = messages.filter(m => m.role === 'gemini')
+    const userMsgs = messages.filter(m => m.role === 'user')
+    const modelsUsed = [...new Set([...claudeMsgs.map(m => m.model), ...geminiMsgs.map(m => m.model)].filter(Boolean))] as string[]
+    const firstMsg = messages[0]?.timestamp
+    const lastMsg = messages[messages.length - 1]?.timestamp
+    const currentConv = conversations.find(c => c.id === activeConversationId)
+    const sessions = currentConv?.sessions || []
+    const totalDuration = sessions.reduce((sum, s) => {
+      const end = s.endedAt || new Date()
+      return sum + Math.round((end.getTime() - s.startedAt.getTime()) / 60000)
+    }, 0)
+    
+    return {
+      totalMessages: messages.length,
+      userMessages: userMsgs.length,
+      claudeMessages: claudeMsgs.length,
+      geminiMessages: geminiMsgs.length,
+      claudeTokensIn: claudeMsgs.reduce((sum, m) => sum + (m.tokensIn || 0), 0),
+      claudeTokensOut: claudeMsgs.reduce((sum, m) => sum + (m.tokensOut || 0), 0),
+      geminiTokensIn: geminiMsgs.reduce((sum, m) => sum + (m.tokensIn || 0), 0),
+      geminiTokensOut: geminiMsgs.reduce((sum, m) => sum + (m.tokensOut || 0), 0),
+      claudeCost: claudeMsgs.reduce((sum, m) => sum + (m.cost || 0), 0),
+      geminiCost: geminiMsgs.reduce((sum, m) => sum + (m.cost || 0), 0),
+      totalCost: messages.reduce((sum, m) => sum + (m.cost || 0), 0),
+      totalDuration,
+      sessions,
+      modelsUsed,
+      deviceType: getDeviceType(),
+      firstMessageAt: firstMsg,
+      lastMessageAt: lastMsg
     }
-  }, [conversations])
+  }, [messages, conversations, activeConversationId])
 
   const updateAgentSetting = (agentId: string, key: keyof AgentSettings, value: number) => {
-    setAgents(prev => ({
-      ...prev,
-      [agentId]: { ...prev[agentId], settings: { ...prev[agentId].settings, [key]: value } }
-    }))
+    setAgents(prev => ({ ...prev, [agentId]: { ...prev[agentId], settings: { ...prev[agentId].settings, [key]: value } } }))
   }
 
-  const addMessage = useCallback((role: Message['role'], content: string, thinking?: string, tokensIn?: number, tokensOut?: number, msgAttachments?: Attachment[]) => {
-    const msg: Message = { id: crypto.randomUUID(), role, content, thinking, tokensIn, tokensOut, timestamp: new Date(), attachments: msgAttachments }
+  const addMessage = useCallback((role: Message['role'], content: string, thinking?: string, model?: string, modelId?: string, tokensIn?: number, tokensOut?: number, cost?: number, msgAttachments?: Attachment[]) => {
+    const msg: Message = { id: crypto.randomUUID(), role, content, thinking, model, modelId, tokensIn, tokensOut, cost, timestamp: new Date(), attachments: msgAttachments }
     setMessages(prev => [...prev, msg])
-    if (activeConversationId) {
-      setConversations(prev => prev.map(c => c.id === activeConversationId ? { ...c, messages: [...c.messages, msg] } : c))
-    }
     return msg
-  }, [activeConversationId])
+  }, [])
 
   const setMessageFeedback = (msgId: string, feedback: 'up' | 'down', msgRole: string) => {
     setMessages(prev => prev.map(m => m.id === msgId ? { ...m, feedback: m.feedback === feedback ? undefined : feedback } : m))
-    
-    // Adjust priority based on feedback
     if (feedback === 'up') {
       if (msgRole === 'claude') setAgentPriority(prev => Math.max(-2, prev - 1))
       if (msgRole === 'gemini') setAgentPriority(prev => Math.min(2, prev + 1))
     }
   }
 
+  const endCurrentSession = useCallback(() => {
+    if (!currentSessionId || !sessionStartTime) return
+    
+    const claudeMsgs = messages.filter(m => m.role === 'claude')
+    const geminiMsgs = messages.filter(m => m.role === 'gemini')
+    
+    const session: Session = {
+      id: currentSessionId,
+      startedAt: sessionStartTime,
+      endedAt: new Date(),
+      messageCount: messages.length,
+      claudeCost: claudeMsgs.reduce((sum, m) => sum + (m.cost || 0), 0),
+      geminiCost: geminiMsgs.reduce((sum, m) => sum + (m.cost || 0), 0),
+      totalCost: messages.reduce((sum, m) => sum + (m.cost || 0), 0)
+    }
+    
+    setConversations(prev => prev.map(c => 
+      c.id === activeConversationId 
+        ? { ...c, sessions: [...(c.sessions || []), session], stats: calculateStats() }
+        : c
+    ))
+    
+    setCurrentSessionId(null)
+    setSessionStartTime(null)
+  }, [currentSessionId, sessionStartTime, messages, activeConversationId, calculateStats])
+
   const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files
     if (!files) return
-    
     for (const file of Array.from(files)) {
       const isImage = file.type.startsWith('image/')
       const reader = new FileReader()
-      
       reader.onload = () => {
         const base64 = (reader.result as string).split(',')[1]
-        const attachment: Attachment = {
-          id: crypto.randomUUID(),
-          type: isImage ? 'image' : 'file',
-          name: file.name,
-          url: URL.createObjectURL(file),
-          base64
-        }
-        setAttachments(prev => [...prev, attachment])
+        setAttachments(prev => [...prev, { id: crypto.randomUUID(), type: isImage ? 'image' : 'file', name: file.name, url: URL.createObjectURL(file), base64 }])
       }
-      
       reader.readAsDataURL(file)
     }
-    
     e.target.value = ''
   }
 
-  const removeAttachment = (id: string) => {
-    setAttachments(prev => prev.filter(a => a.id !== id))
+  const removeAttachment = (id: string) => setAttachments(prev => prev.filter(a => a.id !== id))
+
+  const endConversation = () => {
+    endCurrentSession()
+    setIsConversationEnded(true)
+    setConversations(prev => prev.map(c => 
+      c.id === activeConversationId ? { ...c, isEnded: true, endedAt: new Date(), stats: calculateStats() } : c
+    ))
   }
 
-  const startNewConversation = () => {
-    const newConv: Conversation = { id: crypto.randomUUID(), title: 'New conversation', messages: [], scribeNotes: [], createdAt: new Date() }
+  const startNewConversation = (resumeFromScribe?: string) => {
+    if (activeConversationId && messages.length > 0 && !isConversationEnded) {
+      endConversation()
+    }
+    
+    const newSessionId = crypto.randomUUID()
+    const newConv: Conversation = { 
+      id: crypto.randomUUID(), 
+      title: resumeFromScribe ? 'Resumed conversation' : 'New conversation', 
+      messages: [], 
+      scribeNotes: resumeFromScribe ? [{ timestamp: new Date(), content: `**Resumed from previous conversation:**\n${resumeFromScribe}` }] : [], 
+      sessions: [],
+      isEnded: false,
+      createdAt: new Date() 
+    }
     setConversations(prev => [newConv, ...prev])
     setActiveConversationId(newConv.id)
     setMessages([])
-    setScribeNotes([])
+    setScribeNotes(resumeFromScribe ? [{ timestamp: new Date(), content: `**Resumed from previous conversation:**\n${resumeFromScribe}` }] : [])
+    setIsConversationEnded(false)
+    setCurrentSessionId(newSessionId)
+    setSessionStartTime(new Date())
     setAgents({
-      claude: { name: 'Claude', settings: { ...defaultSettings }, tokensIn: 0, tokensOut: 0, isRefreshed: false, refreshCount: 0 },
-      gemini: { name: 'Gemini', settings: { ...defaultSettings }, tokensIn: 0, tokensOut: 0, isRefreshed: false, refreshCount: 0 }
+      claude: { name: 'Claude', settings: { ...defaultSettings }, tokensIn: 0, tokensOut: 0, cost: 0, isRefreshed: !!resumeFromScribe, refreshCount: 0 },
+      gemini: { name: 'Gemini', settings: { ...defaultSettings }, tokensIn: 0, tokensOut: 0, cost: 0, isRefreshed: !!resumeFromScribe, refreshCount: 0 }
     })
   }
 
+  const resumeConversation = () => {
+    const allNotes = scribeNotes.map(n => n.content).join('\n\n')
+    const newSessionId = crypto.randomUUID()
+    
+    setIsConversationEnded(false)
+    setCurrentSessionId(newSessionId)
+    setSessionStartTime(new Date())
+    setAgents({
+      claude: { name: 'Claude', settings: { ...defaultSettings }, tokensIn: 0, tokensOut: 0, cost: 0, isRefreshed: true, refreshCount: agents.claude.refreshCount + 1 },
+      gemini: { name: 'Gemini', settings: { ...defaultSettings }, tokensIn: 0, tokensOut: 0, cost: 0, isRefreshed: true, refreshCount: agents.gemini.refreshCount + 1 }
+    })
+    
+    // Add system message
+    addMessage('system', '🔄 Fresh agents have joined and read the scribe notes.')
+  }
+
   const loadConversation = (conv: Conversation) => {
+    if (activeConversationId && messages.length > 0 && !isConversationEnded) {
+      endConversation()
+    }
     setActiveConversationId(conv.id)
     setMessages(conv.messages)
     setScribeNotes(conv.scribeNotes || [])
+    setIsConversationEnded(conv.isEnded || false)
+    if (!conv.isEnded) {
+      setCurrentSessionId(crypto.randomUUID())
+      setSessionStartTime(new Date())
+    }
+  }
+
+  const copyScribeNotes = () => {
+    navigator.clipboard.writeText(scribeNotes.map(n => n.content).join('\n\n---\n\n'))
+    setScribeCopied(true)
+    setTimeout(() => setScribeCopied(false), 2000)
+  }
+
+  const shareConversation = async () => {
+    const shareData = {
+      title: conversations.find(c => c.id === activeConversationId)?.title || 'Lounge Conversation',
+      messages: messages.filter(m => m.role !== 'system').map(m => ({
+        role: m.role,
+        content: m.content,
+        model: m.model,
+        timestamp: m.timestamp
+      }))
+    }
+    
+    // Create shareable URL (would need backend support for persistence)
+    const shareText = messages.filter(m => m.role !== 'system').map(m => 
+      `${m.role === 'user' ? 'You' : m.role === 'claude' ? 'Claude' : 'Gemini'}: ${m.content}`
+    ).join('\n\n')
+    
+    if (navigator.share) {
+      try {
+        await navigator.share({ title: shareData.title, text: shareText })
+      } catch (e) { console.log('Share cancelled') }
+    } else {
+      navigator.clipboard.writeText(shareText)
+      alert('Conversation copied to clipboard!')
+    }
   }
 
   const copyMessage = (content: string, id: string) => {
@@ -341,23 +612,31 @@ export default function LoungePage() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
-    if ((!input.trim() && attachments.length === 0) || isProcessing) return
+    if ((!input.trim() && attachments.length === 0) || isProcessing || isConversationEnded) return
+    
+    // Start session if needed
+    if (!currentSessionId) {
+      setCurrentSessionId(crypto.randomUUID())
+      setSessionStartTime(new Date())
+    }
     
     if (!activeConversationId) {
       const title = input.trim().slice(0, 40) || 'Image conversation'
-      const newConv: Conversation = { id: crypto.randomUUID(), title: title + (input.length > 40 ? '...' : ''), messages: [], scribeNotes: [], createdAt: new Date() }
+      const newConv: Conversation = { id: crypto.randomUUID(), title: title + (input.length > 40 ? '...' : ''), messages: [], scribeNotes: [], sessions: [], isEnded: false, createdAt: new Date() }
       setConversations(prev => [newConv, ...prev])
       setActiveConversationId(newConv.id)
     }
-    
     await sendMessage(input.trim())
   }
 
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSubmit(e as any) }
+  }
+
   const handlePoke = async (agentId: string) => {
-    if (isProcessing) return
-    // Set priority to favor the poked agent
+    if (isProcessing || isConversationEnded) return
     setAgentPriority(agentId === 'claude' ? -2 : 2)
-    await sendMessage(`Please elaborate on your last point.`, true)
+    await sendMessage('Please elaborate on your last point.', true)
   }
 
   const handleHush = () => {
@@ -373,14 +652,12 @@ export default function LoungePage() {
     setAttachments([])
     setIsProcessing(true)
     
-    // Build message content with attachments
     let fullContent = messageText
     if (currentAttachments.length > 0) {
-      const attachmentDescs = currentAttachments.map(a => a.type === 'image' ? `[Image: ${a.name}]` : `[File: ${a.name}]`).join(' ')
-      fullContent = `${attachmentDescs} ${messageText}`.trim()
+      fullContent = `${currentAttachments.map(a => a.type === 'image' ? `[Image: ${a.name}]` : `[File: ${a.name}]`).join(' ')} ${messageText}`.trim()
     }
     
-    if (!isPoke) addMessage('user', fullContent, undefined, undefined, undefined, currentAttachments)
+    if (!isPoke) addMessage('user', fullContent, undefined, undefined, undefined, undefined, undefined, undefined, currentAttachments)
 
     abortControllerRef.current = new AbortController()
 
@@ -410,50 +687,28 @@ export default function LoungePage() {
         const { done, value } = await reader.read()
         if (done) break
 
-        const lines = decoder.decode(value).split('\n').filter(l => l.startsWith('data: '))
-
-        for (const line of lines) {
+        for (const line of decoder.decode(value).split('\n').filter(l => l.startsWith('data: '))) {
           try {
             const data = JSON.parse(line.slice(6))
-            
-            if (data.type === 'thinking') {
-              setActiveAgent(data.agent)
-              setCurrentThinking({ agent: data.agent, text: data.content })
-            } else if (data.type === 'complete') {
+            if (data.type === 'thinking') { setActiveAgent(data.agent); setCurrentThinking({ agent: data.agent, text: data.content }) }
+            else if (data.type === 'complete') {
               setCurrentThinking(null)
-              addMessage(data.agent, data.content, data.thinking, data.tokens?.in, data.tokens?.out)
-              
+              addMessage(data.agent, data.content, data.thinking, data.model, data.modelId, data.tokens?.in, data.tokens?.out, data.cost)
               const agentKey = data.agent as 'claude' | 'gemini'
               setAgents(prev => ({
                 ...prev,
-                [agentKey]: {
-                  ...prev[agentKey],
-                  tokensIn: prev[agentKey].tokensIn + (data.tokens?.in || 0),
-                  tokensOut: prev[agentKey].tokensOut + (data.tokens?.out || 0),
-                  isRefreshed: false
-                }
+                [agentKey]: { ...prev[agentKey], tokensIn: prev[agentKey].tokensIn + (data.tokens?.in || 0), tokensOut: prev[agentKey].tokensOut + (data.tokens?.out || 0), cost: prev[agentKey].cost + (data.cost || 0), isRefreshed: false }
               }))
               setActiveAgent(null)
             } else if (data.type === 'scribe') {
-              const newNote: ScribeNote = { timestamp: new Date(), content: data.content }
-              setScribeNotes(prev => [...prev, newNote])
-              if (activeConversationId) {
-                setConversations(prev => prev.map(c => c.id === activeConversationId ? { ...c, scribeNotes: [...c.scribeNotes, newNote] } : c))
-              }
+              setScribeNotes(prev => [...prev, { timestamp: new Date(), content: data.content }])
             }
           } catch {}
         }
       }
-      
-      // Reset priority back to neutral after poke
-      if (isPoke) {
-        setAgentPriority(0)
-      }
-      
+      if (isPoke) setAgentPriority(0)
     } catch (error) {
-      if ((error as Error).name !== 'AbortError') {
-        addMessage('claude', 'Sorry, something went wrong.')
-      }
+      if ((error as Error).name !== 'AbortError') addMessage('claude', 'Sorry, something went wrong.')
     } finally {
       setIsProcessing(false)
       setCurrentThinking(null)
@@ -463,17 +718,30 @@ export default function LoungePage() {
 
   if (!isLoaded) return <div className="min-h-screen flex items-center justify-center bg-gray-50 text-sm">Loading...</div>
 
+  const currentStats = calculateStats()
+
   return (
     <main className="flex flex-col h-screen bg-gray-50 text-[13px]">
+      {showStats && <StatsModal stats={currentStats} onClose={() => setShowStats(false)} />}
+      
       {/* Header */}
       <header className="flex items-center justify-between px-4 py-2 border-b border-gray-200 bg-white">
         <div className="flex items-center gap-2">
+          <button onClick={() => setSidebarCollapsed(!sidebarCollapsed)} className="p-1.5 hover:bg-gray-100 rounded">
+            {sidebarCollapsed ? <PanelLeft className="w-4 h-4" /> : <PanelLeftClose className="w-4 h-4" />}
+          </button>
           <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-orange-400 via-purple-500 to-blue-500 flex items-center justify-center">
             <MessageSquare className="w-3.5 h-3.5 text-white" />
           </div>
           <span className="font-semibold text-gray-800">Lounge</span>
         </div>
         <div className="flex items-center gap-2 text-xs text-gray-500">
+          {messages.length > 0 && (
+            <>
+              <button onClick={shareConversation} className="p-1.5 hover:bg-gray-100 rounded" title="Share"><Share2 className="w-3.5 h-3.5" /></button>
+              <button onClick={() => setShowStats(true)} className="p-1.5 hover:bg-gray-100 rounded" title="Stats"><BarChart3 className="w-3.5 h-3.5" /></button>
+            </>
+          )}
           <span>{user?.firstName || 'User'}</span>
           <button onClick={() => router.push('/settings')} className="p-1.5 hover:bg-gray-100 rounded"><Settings className="w-3.5 h-3.5" /></button>
           <SignOutButton><button className="p-1.5 hover:bg-gray-100 rounded"><LogOut className="w-3.5 h-3.5" /></button></SignOutButton>
@@ -481,10 +749,10 @@ export default function LoungePage() {
       </header>
 
       <div className="flex flex-1 overflow-hidden">
-        {/* Left - History */}
-        <div className="w-48 border-r border-gray-200 bg-white flex flex-col">
+        {/* Left - History (collapsible) */}
+        <div className={`${sidebarCollapsed ? 'w-0' : 'w-48'} transition-all duration-200 border-r border-gray-200 bg-white flex flex-col overflow-hidden`}>
           <div className="p-2">
-            <button onClick={startNewConversation} className="w-full flex items-center gap-1.5 px-2.5 py-1.5 text-xs bg-gray-100 hover:bg-gray-200 rounded-lg">
+            <button onClick={() => startNewConversation()} className="w-full flex items-center gap-1.5 px-2.5 py-1.5 text-xs bg-gray-100 hover:bg-gray-200 rounded-lg">
               <Plus className="w-3 h-3" /> New chat
             </button>
           </div>
@@ -493,7 +761,11 @@ export default function LoungePage() {
               <button key={conv.id} onClick={() => loadConversation(conv)}
                 className={`w-full text-left px-3 py-2 text-xs hover:bg-gray-50 border-b border-gray-50 ${activeConversationId === conv.id ? 'bg-blue-50 border-l-2 border-l-blue-500' : ''}`}>
                 <div className="font-medium text-gray-700 truncate">{conv.title}</div>
-                <div className="text-[10px] text-gray-400">{conv.messages.length} msgs</div>
+                <div className="text-[10px] text-gray-400 flex items-center gap-1">
+                  {conv.messages.length} msgs
+                  {conv.stats && <span className="text-green-600">• {formatCost(conv.stats.totalCost)}</span>}
+                  {conv.isEnded && <span className="text-gray-400">• ended</span>}
+                </div>
               </button>
             ))}
           </div>
@@ -506,71 +778,66 @@ export default function LoungePage() {
               <div className="flex flex-col items-center justify-center h-full text-gray-400">
                 <MessageSquare className="w-8 h-8 mb-2 opacity-40" />
                 <p className="text-sm">Start a conversation</p>
-                <p className="text-[10px] mt-1">Attach images or files to discuss</p>
               </div>
             ) : (
-              messages.map((msg) => (
-                <div key={msg.id} className={`flex ${msg.role === 'user' ? 'justify-end' : msg.role === 'system' ? 'justify-center' : 'justify-start'}`}>
-                  {msg.role === 'system' ? (
-                    <div className="text-[10px] text-gray-400 bg-gray-100 px-3 py-1 rounded-full">{msg.content}</div>
-                  ) : (
-                    <div className={`max-w-[80%] rounded-xl px-3 py-2 ${msg.role === 'user' ? 'bg-gray-800 text-white' : msg.role === 'claude' ? 'bg-orange-50 border border-orange-100' : 'bg-blue-50 border border-blue-100'}`}>
-                      {msg.role !== 'user' && (
-                        <div className={`text-[10px] font-medium mb-1 flex items-center gap-1.5 ${msg.role === 'claude' ? 'text-orange-600' : 'text-blue-600'}`}>
-                          {msg.role === 'claude' ? <ClaudeLogo className="w-3.5 h-3.5" /> : <GeminiLogo className="w-3.5 h-3.5" />}
-                          {msg.role === 'claude' ? 'Claude' : 'Gemini'}
-                          <span className="text-gray-400 font-normal flex items-center gap-0.5 ml-auto">
-                            <Clock className="w-2.5 h-2.5" />{formatTime(msg.timestamp)}
-                          </span>
-                        </div>
-                      )}
-                      
-                      {/* Attachments */}
-                      {msg.attachments && msg.attachments.length > 0 && (
-                        <div className="flex gap-1 mb-2 flex-wrap">
-                          {msg.attachments.map(att => (
-                            <div key={att.id} className="relative">
-                              {att.type === 'image' ? (
-                                <img src={att.url} alt={att.name} className="max-w-[200px] max-h-[150px] rounded-lg" />
-                              ) : (
-                                <div className="flex items-center gap-1 bg-gray-100 px-2 py-1 rounded text-[10px]">
-                                  <FileText className="w-3 h-3" />{att.name}
-                                </div>
-                              )}
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                      
-                      <div className="text-xs leading-relaxed whitespace-pre-wrap">
-                        <FormattedText content={msg.content} />
+              <>
+                {messages.map((msg) => (
+                  <div key={msg.id} className={`flex ${msg.role === 'user' ? 'justify-end' : msg.role === 'system' ? 'justify-center' : 'justify-start'}`}>
+                    {msg.role === 'system' ? (
+                      <div className="text-[10px] text-gray-400 bg-gray-100 px-3 py-1 rounded-full">{msg.content}</div>
+                    ) : (
+                      <div className={`max-w-[80%] rounded-xl px-3 py-2 ${msg.role === 'user' ? 'bg-gray-800 text-white' : msg.role === 'claude' ? 'bg-orange-50 border border-orange-100' : 'bg-blue-50 border border-blue-100'}`}>
+                        {msg.role !== 'user' && (
+                          <div className={`text-[10px] font-medium mb-1 flex items-center gap-1.5 ${msg.role === 'claude' ? 'text-orange-600' : 'text-blue-600'}`}>
+                            {msg.role === 'claude' ? <ClaudeLogo className="w-3.5 h-3.5" /> : <GeminiLogo className="w-3.5 h-3.5" />}
+                            {msg.role === 'claude' ? 'Claude' : 'Gemini'}
+                            {msg.model && <span className="text-gray-400 font-normal">({msg.model})</span>}
+                            <span className="text-gray-400 font-normal flex items-center gap-0.5 ml-auto"><Clock className="w-2.5 h-2.5" />{formatTime(msg.timestamp)}</span>
+                          </div>
+                        )}
+                        {msg.attachments && msg.attachments.length > 0 && (
+                          <div className="flex gap-1 mb-2 flex-wrap">
+                            {msg.attachments.map(att => (
+                              <div key={att.id}>{att.type === 'image' ? <img src={att.url} alt={att.name} className="max-w-[200px] max-h-[150px] rounded-lg" /> : <div className="flex items-center gap-1 bg-gray-100 px-2 py-1 rounded text-[10px]"><FileText className="w-3 h-3" />{att.name}</div>}</div>
+                            ))}
+                          </div>
+                        )}
+                        <div className="text-xs leading-relaxed"><FormattedText content={msg.content} /></div>
+                        {msg.role !== 'user' && (
+                          <div className="flex items-center gap-0.5 mt-1.5 pt-1.5 border-t border-black/5">
+                            <button onClick={() => copyMessage(msg.content, msg.id)} className="p-1 hover:bg-black/5 rounded text-gray-400 hover:text-gray-600">{copiedId === msg.id ? <Check className="w-3 h-3 text-green-500" /> : <Copy className="w-3 h-3" />}</button>
+                            <button onClick={() => setMessageFeedback(msg.id, 'up', msg.role)} className={`p-1 hover:bg-black/5 rounded ${msg.feedback === 'up' ? 'text-green-500' : 'text-gray-400 hover:text-green-600'}`}><ThumbsUp className="w-3 h-3" /></button>
+                            <button onClick={() => setMessageFeedback(msg.id, 'down', msg.role)} className={`p-1 hover:bg-black/5 rounded ${msg.feedback === 'down' ? 'text-red-500' : 'text-gray-400 hover:text-red-600'}`}><ThumbsDown className="w-3 h-3" /></button>
+                            {msg.cost !== undefined && msg.cost > 0 && <span className="text-[8px] text-gray-400 ml-auto flex items-center gap-0.5"><DollarSign className="w-2.5 h-2.5" />{formatCost(msg.cost)}</span>}
+                          </div>
+                        )}
                       </div>
-                      
-                      {msg.role !== 'user' && (
-                        <div className="flex items-center gap-0.5 mt-1.5 pt-1.5 border-t border-black/5">
-                          <button onClick={() => copyMessage(msg.content, msg.id)} className="p-1 hover:bg-black/5 rounded text-gray-400 hover:text-gray-600">
-                            {copiedId === msg.id ? <Check className="w-3 h-3 text-green-500" /> : <Copy className="w-3 h-3" />}
-                          </button>
-                          <button onClick={() => setMessageFeedback(msg.id, 'up', msg.role)} className={`p-1 hover:bg-black/5 rounded ${msg.feedback === 'up' ? 'text-green-500' : 'text-gray-400 hover:text-green-600'}`}>
-                            <ThumbsUp className="w-3 h-3" />
-                          </button>
-                          <button onClick={() => setMessageFeedback(msg.id, 'down', msg.role)} className={`p-1 hover:bg-black/5 rounded ${msg.feedback === 'down' ? 'text-red-500' : 'text-gray-400 hover:text-red-600'}`}>
-                            <ThumbsDown className="w-3 h-3" />
-                          </button>
-                        </div>
-                      )}
+                    )}
+                  </div>
+                ))}
+                
+                {/* End of conversation stats */}
+                {isConversationEnded && messages.length > 0 && (
+                  <div className="bg-gray-100 rounded-xl p-4 text-center space-y-2">
+                    <div className="text-sm font-medium text-gray-700">Conversation Ended</div>
+                    <div className="text-[10px] text-gray-500 space-y-1">
+                      <div>{currentStats.totalMessages} messages • {formatDuration(currentStats.totalDuration)} • {currentStats.sessions.length} session(s)</div>
+                      <div className="text-green-600 font-medium">{formatCost(currentStats.totalCost)} total (Claude: {formatCost(currentStats.claudeCost)}, Gemini: {formatCost(currentStats.geminiCost)})</div>
+                      <div className="text-gray-400">Models: {currentStats.modelsUsed.join(', ') || 'None'}</div>
+                      <div className="flex items-center justify-center gap-1">{currentStats.deviceType === 'desktop' ? <Monitor className="w-3 h-3" /> : <Smartphone className="w-3 h-3" />}{currentStats.deviceType}</div>
                     </div>
-                  )}
-                </div>
-              ))
+                    <button onClick={resumeConversation} className="mt-2 px-3 py-1.5 bg-blue-500 text-white text-xs rounded-lg hover:bg-blue-600 flex items-center gap-1 mx-auto">
+                      <RotateCcw className="w-3 h-3" /> Resume with fresh agents
+                    </button>
+                  </div>
+                )}
+              </>
             )}
             
             {currentThinking && (
               <div className="flex justify-start">
                 <div className={`rounded-xl px-3 py-2 text-xs ${currentThinking.agent === 'claude' ? 'bg-orange-50/50' : 'bg-blue-50/50'}`}>
-                  <span className={`${currentThinking.agent === 'claude' ? 'text-orange-400' : 'text-blue-400'} animate-pulse`}>
-                    {currentThinking.agent === 'claude' ? 'Claude' : 'Gemini'} thinking...
-                  </span>
+                  <span className={`${currentThinking.agent === 'claude' ? 'text-orange-400' : 'text-blue-400'} animate-pulse`}>{currentThinking.agent === 'claude' ? 'Claude' : 'Gemini'} thinking...</span>
                   <span className="text-gray-400 italic ml-1">"{currentThinking.text}"</span>
                 </div>
               </div>
@@ -578,21 +845,13 @@ export default function LoungePage() {
             <div ref={messagesEndRef} />
           </div>
 
-          {/* Attachments Preview */}
+          {/* Attachments */}
           {attachments.length > 0 && (
             <div className="px-4 py-2 border-t border-gray-100 flex gap-2 flex-wrap">
               {attachments.map(att => (
                 <div key={att.id} className="relative group">
-                  {att.type === 'image' ? (
-                    <img src={att.url} alt={att.name} className="w-16 h-16 object-cover rounded-lg" />
-                  ) : (
-                    <div className="w-16 h-16 bg-gray-100 rounded-lg flex items-center justify-center">
-                      <FileText className="w-6 h-6 text-gray-400" />
-                    </div>
-                  )}
-                  <button onClick={() => removeAttachment(att.id)} className="absolute -top-1 -right-1 w-4 h-4 bg-red-500 text-white rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
-                    <X className="w-3 h-3" />
-                  </button>
+                  {att.type === 'image' ? <img src={att.url} alt={att.name} className="w-16 h-16 object-cover rounded-lg" /> : <div className="w-16 h-16 bg-gray-100 rounded-lg flex items-center justify-center"><FileText className="w-6 h-6 text-gray-400" /></div>}
+                  <button onClick={() => removeAttachment(att.id)} className="absolute -top-1 -right-1 w-4 h-4 bg-red-500 text-white rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100"><X className="w-3 h-3" /></button>
                 </div>
               ))}
             </div>
@@ -600,35 +859,40 @@ export default function LoungePage() {
 
           {/* Input */}
           <form onSubmit={handleSubmit} className="p-3 border-t border-gray-200 bg-white">
-            <div className="flex gap-2">
-              <input type="file" ref={fileInputRef} onChange={handleFileSelect} multiple accept="image/*,.pdf,.txt,.md,.csv" className="hidden" />
-              <button type="button" onClick={() => fileInputRef.current?.click()} className="px-2 py-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg">
-                <Paperclip className="w-4 h-4" />
-              </button>
-              <input type="text" value={input} onChange={(e) => setInput(e.target.value)} placeholder="Message..." className="flex-1 px-3 py-2 text-sm rounded-lg border border-gray-200 focus:outline-none focus:ring-1 focus:ring-blue-500" disabled={isProcessing} />
-              {isProcessing ? (
-                <button type="button" onClick={handleHush} className="px-3 py-2 bg-red-500 text-white rounded-lg"><Square className="w-4 h-4" /></button>
-              ) : (
-                <button type="submit" disabled={!input.trim() && attachments.length === 0} className="px-3 py-2 bg-blue-500 text-white rounded-lg disabled:opacity-40"><Send className="w-4 h-4" /></button>
-              )}
-            </div>
+            {isConversationEnded ? (
+              <div className="text-center text-xs text-gray-400 py-2">
+                Conversation ended. <button onClick={resumeConversation} className="text-blue-500 hover:underline">Resume</button> or <button onClick={() => startNewConversation()} className="text-blue-500 hover:underline">start new</button>
+              </div>
+            ) : (
+              <div className="flex gap-2 items-end">
+                <input type="file" ref={fileInputRef} onChange={handleFileSelect} multiple accept="image/*,.pdf,.txt,.md,.csv" className="hidden" />
+                <button type="button" onClick={() => fileInputRef.current?.click()} className="px-2 py-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg flex-shrink-0"><Paperclip className="w-4 h-4" /></button>
+                <textarea value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={handleKeyDown} placeholder="Message... (Shift+Enter for new line)" className="flex-1 px-3 py-2 text-sm rounded-lg border border-gray-200 focus:outline-none focus:ring-1 focus:ring-blue-500 resize-none min-h-[40px] max-h-[120px]" rows={1} disabled={isProcessing}
+                  onInput={(e) => { const t = e.target as HTMLTextAreaElement; t.style.height = 'auto'; t.style.height = Math.min(t.scrollHeight, 120) + 'px' }} />
+                {!isConversationEnded && messages.length > 0 && (
+                  <button type="button" onClick={endConversation} className="px-2 py-2 text-gray-400 hover:text-red-500 hover:bg-gray-100 rounded-lg flex-shrink-0" title="End conversation"><Square className="w-4 h-4" /></button>
+                )}
+                {isProcessing ? (
+                  <button type="button" onClick={handleHush} className="px-3 py-2 bg-red-500 text-white rounded-lg flex-shrink-0"><Square className="w-4 h-4" /></button>
+                ) : (
+                  <button type="submit" disabled={!input.trim() && attachments.length === 0} className="px-3 py-2 bg-blue-500 text-white rounded-lg disabled:opacity-40 flex-shrink-0"><Send className="w-4 h-4" /></button>
+                )}
+              </div>
+            )}
           </form>
         </div>
 
         {/* Right - Controls */}
         <div className="w-52 border-l border-gray-200 bg-white flex flex-col text-xs overflow-y-auto">
-          {/* Priority */}
           <div className="p-3 border-b border-gray-100">
             <div className="text-[9px] font-medium text-gray-400 uppercase tracking-wide mb-2">Agent Priority</div>
             <AgentPrioritySelector value={agentPriority} onChange={setAgentPriority} />
           </div>
 
-          {/* Agent Controls */}
           <div className="flex-1 p-3 space-y-2.5 overflow-y-auto">
             {Object.entries(agents).map(([id, agent]) => {
               const color = id === 'claude' ? 'orange' : 'blue' as const
               const energy = getEnergy(agent.tokensIn, agent.tokensOut, id as 'claude' | 'gemini')
-              
               return (
                 <div key={id} className={`p-2 rounded-lg border ${activeAgent === id ? id === 'claude' ? 'bg-orange-50 border-orange-200' : 'bg-blue-50 border-blue-200' : 'bg-gray-50 border-gray-100'}`}>
                   <div className="flex items-center justify-between mb-1.5">
@@ -636,22 +900,18 @@ export default function LoungePage() {
                       {id === 'claude' ? <ClaudeLogo className="w-4 h-4" /> : <GeminiLogo className="w-4 h-4" />}
                       <span className={`font-medium text-[11px] ${id === 'claude' ? 'text-orange-700' : 'text-blue-700'}`}>{agent.name}</span>
                     </div>
-                    <button onClick={() => handlePoke(id)} disabled={isProcessing} className="text-[8px] px-1.5 py-0.5 rounded bg-white border border-gray-200 hover:bg-gray-50 disabled:opacity-40">Poke</button>
+                    <button onClick={() => handlePoke(id)} disabled={isProcessing || isConversationEnded} className="text-[8px] px-1.5 py-0.5 rounded bg-white border border-gray-200 hover:bg-gray-50 disabled:opacity-40">Poke</button>
                   </div>
-
                   <div className="mb-2">
                     <div className="flex justify-between text-[8px] text-gray-500 mb-0.5"><span>Energy</span><span>{energy.toFixed(0)}%</span></div>
-                    <div className="h-1 bg-gray-200 rounded-full overflow-hidden">
-                      <div className={`h-full transition-all ${energy > 50 ? 'bg-green-500' : energy > 20 ? 'bg-yellow-500' : 'bg-red-500'}`} style={{ width: `${energy}%` }} />
-                    </div>
-                    <div className="text-[7px] text-gray-400 mt-0.5">{(agent.tokensIn + agent.tokensOut).toLocaleString()} tokens</div>
+                    <div className="h-1 bg-gray-200 rounded-full overflow-hidden"><div className={`h-full transition-all ${energy > 50 ? 'bg-green-500' : energy > 20 ? 'bg-yellow-500' : 'bg-red-500'}`} style={{ width: `${energy}%` }} /></div>
+                    <div className="text-[7px] text-gray-400 mt-0.5 flex justify-between"><span>{(agent.tokensIn + agent.tokensOut).toLocaleString()} tokens</span><span className="text-green-600">({formatCost(agent.cost)})</span></div>
                   </div>
-
                   <div className="space-y-2">
-                    <div><div className="text-[8px] text-gray-500 mb-0.5">Verbosity</div><ThreePointSlider value={agent.settings.verbosity} onChange={(v) => updateAgentSetting(id, 'verbosity', v)} labels={['Brief', 'Medium', 'Full']} color={color} /></div>
-                    <div><div className="text-[8px] text-gray-500 mb-0.5">Creativity</div><ThreePointSlider value={agent.settings.creativity} onChange={(v) => updateAgentSetting(id, 'creativity', v)} labels={['Factual', 'Balanced', 'Creative']} color={color} /></div>
-                    <div><div className="text-[8px] text-gray-500 mb-0.5">Tension</div><ThreePointSlider value={agent.settings.tension} onChange={(v) => updateAgentSetting(id, 'tension', v)} labels={['Chill', 'Medium', 'Spicy']} color={color} /></div>
                     <div><div className="text-[8px] text-gray-500 mb-0.5">Speed</div><ThreePointSlider value={agent.settings.speed} onChange={(v) => updateAgentSetting(id, 'speed', v)} labels={['Deep', 'Medium', 'Fast']} color={color} /></div>
+                    <div><div className="text-[8px] text-gray-500 mb-0.5">Verbosity</div><ThreePointSlider value={agent.settings.verbosity} onChange={(v) => updateAgentSetting(id, 'verbosity', v)} labels={['Brief', 'Medium', 'Full']} color={color} /></div>
+                    <div><div className="text-[8px] text-gray-500 mb-0.5">Tension</div><ThreePointSlider value={agent.settings.tension} onChange={(v) => updateAgentSetting(id, 'tension', v)} labels={['Chill', 'Medium', 'Spicy']} color={color} /></div>
+                    <div><div className="text-[8px] text-gray-500 mb-0.5">Creativity</div><ThreePointSlider value={agent.settings.creativity} onChange={(v) => updateAgentSetting(id, 'creativity', v)} labels={['Safe', 'Balanced', 'Wild']} color={color} /></div>
                   </div>
                 </div>
               )
@@ -661,22 +921,38 @@ export default function LoungePage() {
           {/* Scribe */}
           <div className="border-t border-gray-100 p-2">
             <button onClick={() => setShowScribe(!showScribe)} className="w-full flex items-center justify-between text-[9px] font-medium text-gray-500">
-              <span className="flex items-center gap-1"><FlashLogo className="w-3 h-3" />Scribe ({scribeNotes.length})</span>
-              {showScribe ? <ChevronDown className="w-3 h-3" /> : <ChevronUp className="w-3 h-3" />}
+              <span className="flex items-center gap-1">
+                <FlashLogo className="w-3 h-3" />
+                <span>Scribe for agents</span>
+              </span>
+              <span className="flex items-center gap-1">
+                <span className="text-gray-400">({scribeNotes.length})</span>
+                {showScribe ? <ChevronDown className="w-3 h-3" /> : <ChevronUp className="w-3 h-3" />}
+              </span>
             </button>
+            <div className="text-[7px] text-gray-400 mt-0.5">Model: {SCRIBE_MODEL}</div>
+            
             {showScribe && scribeNotes.length > 0 && (
-              <div className="mt-1.5 max-h-32 overflow-y-auto space-y-1.5">
-                {scribeNotes.map((note, i) => (
-                  <div key={i} className="text-[9px] text-gray-600 bg-yellow-50 rounded p-2 leading-relaxed">
-                    <div className="text-[8px] text-yellow-600 mb-1">{formatTime(note.timestamp)}</div>
-                    <FormattedText content={note.content} />
-                  </div>
-                ))}
-              </div>
+              <>
+                <div className="flex gap-1 mt-1.5 mb-1">
+                  <button onClick={copyScribeNotes} className="flex-1 flex items-center justify-center gap-1 text-[8px] py-1 bg-gray-100 hover:bg-gray-200 rounded">
+                    {scribeCopied ? <Check className="w-2.5 h-2.5 text-green-500" /> : <Copy className="w-2.5 h-2.5" />}{scribeCopied ? 'Copied' : 'Copy'}
+                  </button>
+                  <button onClick={() => startNewConversation(scribeNotes.map(n => n.content).join('\n\n'))} className="flex-1 flex items-center justify-center gap-1 text-[8px] py-1 bg-blue-100 hover:bg-blue-200 text-blue-700 rounded">
+                    <RotateCcw className="w-2.5 h-2.5" />New from scribe
+                  </button>
+                </div>
+                <div className="max-h-40 overflow-y-auto space-y-1.5">
+                  {scribeNotes.map((note, i) => (
+                    <div key={i} className="text-[9px] text-gray-600 bg-yellow-50 rounded p-2 leading-relaxed">
+                      <div className="text-[8px] text-yellow-600 mb-1">{formatTime(note.timestamp)}</div>
+                      <FormattedText content={note.content} />
+                    </div>
+                  ))}
+                </div>
+              </>
             )}
-            {showScribe && scribeNotes.length === 0 && (
-              <div className="mt-1.5 text-[8px] text-gray-400 italic">Notes will appear as conversation develops...</div>
-            )}
+            {showScribe && scribeNotes.length === 0 && <div className="mt-1.5 text-[8px] text-gray-400 italic">Notes appear every ~4 exchanges...</div>}
           </div>
         </div>
       </div>

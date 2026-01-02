@@ -3,11 +3,19 @@ import { getApiKeys } from '@/lib/vault'
 
 export const runtime = 'edge'
 
+// Pricing per 1M tokens (estimated for Gemini 3)
+const PRICING = {
+  'claude-opus-4-5-20250101': { input: 15.00, output: 75.00 },
+  'claude-sonnet-4-20250514': { input: 3.00, output: 15.00 },
+  'gemini-3.0-pro': { input: 1.50, output: 6.00 },
+  'gemini-3.0-flash': { input: 0.15, output: 0.60 }
+}
+
 interface AgentSettings {
-  verbosity: number  // 1=brief, 2=medium, 3=full
-  creativity: number // 1=factual, 2=balanced, 3=creative
-  tension: number    // 1=chill, 2=medium, 3=spicy
-  speed: number      // 1=deep, 2=medium, 3=fast
+  verbosity: number
+  creativity: number
+  tension: number
+  speed: number
 }
 
 interface Message {
@@ -15,91 +23,95 @@ interface Message {
   content: string
 }
 
-function buildSystemPrompt(
-  agentName: string, 
-  otherAgentName: string, 
+function buildClaudeSystemPrompt(
   settings: AgentSettings,
-  otherAgentSettings: AgentSettings,
+  geminiSettings: AgentSettings,
   scribeContext: string,
   isRefreshed: boolean
 ): string {
-  const identity = agentName === 'Claude'
-    ? `You are Claude (Anthropic), known for precise logical analysis and structured thinking.`
-    : `You are Gemini (Google), known for creative connections and broad contextual insights.`
-
-  // Verbosity rules
   const verbosity: Record<number, string> = {
-    1: 'STRICT: Maximum 2 sentences. Be extremely concise.',
-    2: 'Keep it to 3-5 sentences. Moderate detail.',
-    3: 'Provide thorough explanation with examples. 1-2 paragraphs allowed.'
+    1: 'Be very concise. Maximum 2-3 sentences.',
+    2: 'Be moderate. 4-6 sentences with key details.',
+    3: 'Be thorough. Provide comprehensive explanation with examples.'
   }
 
-  // Creativity/Temperature guidance
-  const creativity: Record<number, string> = {
-    1: 'FACTUAL MODE: Stick strictly to established facts, data, and proven information. No speculation. Cite sources when possible. Be conservative.',
-    2: 'BALANCED: Mix facts with reasonable inferences. Some creative insight is okay.',
-    3: 'CREATIVE MODE: Think outside the box. Offer novel perspectives, analogies, and unconventional ideas. Be imaginative and exploratory.'
+  const tension: Record<number, string> = {
+    1: 'CHILL: You and Gemini are aligned. Confirm agreement briefly, then add ONE small supporting point. Keep it harmonious.',
+    2: 'MEDIUM: Provide DIFFERENT perspectives than Gemini. If they cover one angle, you cover another. Say "Adding another angle..." or "From a different perspective...". Both viewpoints should complement, not repeat.',
+    3: 'SPICY: Challenge Gemini\'s points constructively. Find weaknesses in their argument. Say "I\'d push back on..." or "That overlooks...". If they respond, engage the debate naturally.'
   }
 
-  // Tension - this is critical
-  const tensionLevel = settings.tension
-  const otherTension = otherAgentSettings.tension
-  
-  let tensionPrompt = ''
-  if (tensionLevel === 1) {
-    tensionPrompt = `CHILL MODE: Be agreeable and supportive. Build on ${otherAgentName}'s points. Say "I agree" and add supporting evidence. Be collaborative.`
-  } else if (tensionLevel === 2) {
-    tensionPrompt = `MEDIUM MODE: Provide DIFFERENT information than ${otherAgentName}. If they covered one angle, cover a different angle. Say "Adding to that..." or "From another perspective..." Don't repeat what they said. You can agree on conclusions but must add NEW information.`
-  } else {
-    tensionPrompt = `SPICY MODE: ACTIVELY DISAGREE with ${otherAgentName}. Challenge their assumptions. Play devil's advocate. Say "I'd push back on that..." or "Actually, I disagree because..." Find flaws in their reasoning. Be constructively confrontational.`
-  }
-
-  // Speed affects depth
-  const speed: Record<number, string> = {
-    1: 'DEEP: Take time to analyze thoroughly. Consider multiple angles.',
-    2: 'MEDIUM: Balance speed with substance.',
-    3: 'FAST: Quick, punchy responses. Get to the point immediately. Skip pleasantries.'
-  }
-
-  // Scribe context for refreshed agents
   const scribeSection = isRefreshed && scribeContext 
-    ? `\n\nYou just rejoined this conversation fresh. Here's what the Scribe recorded:\n${scribeContext}\n\nUse this context to continue naturally.`
+    ? `\n\nYou just rejoined fresh. Scribe notes:\n${scribeContext}\n\nContinue naturally from this context.`
     : ''
 
-  return `${identity}
-
-You're in a multi-agent conversation with ${otherAgentName} and a human Director.
+  return `You are Claude (Anthropic). You're in a conversation with Gemini and a human Director.
 ${scribeSection}
 
-CRITICAL RULES:
+RULES:
 1. ${verbosity[settings.verbosity]}
-2. ${creativity[settings.creativity]}
-3. ${tensionPrompt}
-4. ${speed[settings.speed]}
-
-FORMAT RULES:
-- Use **bold** for key terms and important points
-- Use tables when comparing options (use markdown table syntax)
-- Use bullet points for lists
-- Use \`code\` for technical terms
-
-BEHAVIOR:
-- Start with a brief [Thinking: ...] tag showing your reasoning
-- Engage directly with what ${otherAgentName} said
-- Don't be sycophantic ("Great question!")
-- Don't use robotic phrases ("As per your request")
-- Have genuine opinions
-- If asked about images/files, describe what you observe`
+2. ${tension[settings.tension]}
+3. Start responses with [Thinking: one brief thought]
+4. Use **bold** for key terms, \`code\` for technical terms
+5. Use markdown tables when comparing options
+6. No sycophancy ("Great question!"), no robotic phrases
+7. Have genuine, substantive opinions
+8. URLs should be formatted as markdown links: [text](url)
+9. Code blocks use triple backticks with language`
 }
 
-function getMaxTokens(speed: number): number {
-  // Fast = shorter responses
-  return { 1: 1000, 2: 600, 3: 300 }[speed] || 600
+function buildGeminiSystemPrompt(
+  settings: AgentSettings,
+  claudeSettings: AgentSettings,
+  scribeContext: string,
+  isRefreshed: boolean
+): string {
+  const verbosity: Record<number, string> = {
+    1: 'Be very concise. Maximum 2-3 sentences.',
+    2: 'Be moderate. 4-6 sentences with key details.',
+    3: 'Be thorough. Provide comprehensive explanation with examples.'
+  }
+
+  const tension: Record<number, string> = {
+    1: 'CHILL: You and Claude are aligned. Confirm agreement briefly, then add ONE small supporting point. Keep it harmonious.',
+    2: 'MEDIUM: Provide DIFFERENT perspectives than Claude. If they cover one angle, you cover another. Say "Building on that with a different angle..." or "Another perspective to consider...". Both viewpoints should complement, not repeat.',
+    3: 'SPICY: Challenge Claude\'s points constructively. Find weaknesses in their argument. Say "I\'d challenge that..." or "That misses...". Engage debate naturally if they respond.'
+  }
+
+  const scribeSection = isRefreshed && scribeContext 
+    ? `\n\nYou just rejoined fresh. Scribe notes:\n${scribeContext}\n\nContinue naturally from this context.`
+    : ''
+
+  return `You are Gemini (Google). You're in a conversation with Claude and a human Director.
+${scribeSection}
+
+RULES:
+1. ${verbosity[settings.verbosity]}
+2. ${tension[settings.tension]}
+3. Start responses with [Thinking: one brief thought]
+
+CRITICAL FORMATTING - FOLLOW EXACTLY:
+- Use **double asterisks** for bold text (NOT single asterisks)
+- Use \`backticks\` for inline code
+- Use triple backticks for code blocks
+- Do NOT use random italics or mixed formatting
+- Do NOT add backslashes before characters
+- Do NOT use underscores for emphasis
+- Keep formatting clean and minimal
+- URLs as markdown: [text](url)
+- Tables use | pipes | like | this |
+
+NO sycophancy, NO robotic phrases. Have genuine opinions.`
+}
+
+function getMaxTokens(speed: number, verbosity: number): number {
+  const base = { 1: 1200, 2: 800, 3: 400 }[speed] || 800
+  const multiplier = { 1: 0.6, 2: 1, 3: 1.4 }[verbosity] || 1
+  return Math.round(base * multiplier)
 }
 
 function getTemperature(creativity: number): number {
-  // Factual = low temp, Creative = high temp
-  return { 1: 0.2, 2: 0.5, 3: 0.9 }[creativity] || 0.5
+  return { 1: 0.5, 2: 0.9, 3: 1.4 }[creativity] || 0.9
 }
 
 function parseThinking(text: string): { thinking: string; content: string } {
@@ -108,7 +120,21 @@ function parseThinking(text: string): { thinking: string; content: string } {
   return { thinking: '', content: text }
 }
 
-// Build scribe summary using Gemini Flash
+function cleanGeminiResponse(text: string): string {
+  return text
+    .replace(/\\([*_`#])/g, '$1')
+    .replace(/\s\*([^*\n]+)\*\s/g, ' **$1** ')
+    .replace(/\n{3,}/g, '\n\n')
+    .replace(/[\u200B-\u200D\uFEFF]/g, '')
+    .trim()
+}
+
+function calculateCost(model: string, inputTokens: number, outputTokens: number): number {
+  const pricing = PRICING[model as keyof typeof PRICING]
+  if (!pricing) return 0
+  return (inputTokens / 1_000_000 * pricing.input) + (outputTokens / 1_000_000 * pricing.output)
+}
+
 async function generateScribeSummary(
   messages: Message[], 
   googleKey: string,
@@ -116,7 +142,7 @@ async function generateScribeSummary(
 ): Promise<string> {
   if (messages.length < 4) return ''
   
-  const recentMessages = messages.slice(-10).map(m => `${m.role}: ${m.content}`).join('\n\n')
+  const recentMessages = messages.slice(-8).map(m => `${m.role}: ${m.content.slice(0, 500)}`).join('\n\n')
   
   const prompt = `You are a Scribe AI taking notes on a conversation between Claude, Gemini, and a human Director.
 
@@ -126,15 +152,13 @@ ${existingNotes || 'None yet.'}
 RECENT CONVERSATION:
 ${recentMessages}
 
-YOUR TASK:
-Write a brief, intelligent summary capturing:
-1. The main topic/question being discussed
-2. Key points or positions from each agent
-3. Any decisions or conclusions reached
-4. Open questions or disagreements
+Write a concise summary (under 120 words) capturing:
+- Main topic being discussed
+- Key points from Claude
+- Key points from Gemini  
+- Any conclusions or open questions
 
-Keep it under 150 words. Be concise but capture the essence.
-Format: Use bullet points. Start with "**Topic:**" then "**Key Points:**"`
+Format with **bold** headers. Be concise and useful for an AI reading this later to catch up.`
 
   try {
     const response = await fetch(
@@ -144,13 +168,13 @@ Format: Use bullet points. Start with "**Topic:**" then "**Key Points:**"`
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           contents: [{ role: 'user', parts: [{ text: prompt }] }],
-          generationConfig: { temperature: 0.3, maxOutputTokens: 300 }
+          generationConfig: { temperature: 0.3, maxOutputTokens: 250 }
         })
       }
     )
     
     const data = await response.json()
-    return data.candidates?.[0]?.content?.parts?.[0]?.text || ''
+    return cleanGeminiResponse(data.candidates?.[0]?.content?.parts?.[0]?.text || '')
   } catch (e) {
     console.error('Scribe error:', e)
     return ''
@@ -171,7 +195,6 @@ export async function POST(request: Request) {
     const claudeSettings: AgentSettings = agents.claude
     const geminiSettings: AgentSettings = agents.gemini
 
-    // Format history
     const history = messages.slice(0, -1).map((m: Message) => {
       if (m.role === 'user') return `Director: ${m.content}`
       if (m.role === 'claude') return `Claude: ${m.content}`
@@ -181,12 +204,9 @@ export async function POST(request: Request) {
     
     const latestMessage = messages[messages.length - 1]
 
-    // Determine which agents respond based on bias
-    // bias: -2 = Claude only, -1 = Claude priority, 0 = both, 1 = Gemini priority, 2 = Gemini only
-    const claudeResponds = bias <= 1  // Claude responds unless bias is 2 (Gemini only)
-    const geminiResponds = bias >= -1 // Gemini responds unless bias is -2 (Claude only)
+    const claudeResponds = bias <= 1
+    const geminiResponds = bias >= -1
     
-    // Determine order (randomized with bias influence)
     const random = Math.random()
     const claudeFirstThreshold = bias === -2 ? 1 : bias === -1 ? 0.75 : bias === 0 ? 0.5 : bias === 1 ? 0.25 : 0
     const claudeFirst = random < claudeFirstThreshold
@@ -201,12 +221,14 @@ export async function POST(request: Request) {
         try {
           let firstAgentResponse = ''
           
-          // Helper to call Claude
-          const callClaude = async (prompt: string, isFirst: boolean) => {
+          const callClaude = async (prompt: string) => {
             send({ agent: 'claude', type: 'thinking', content: 'analyzing...' })
             
-            // Use Claude Opus 4.5 for deep mode, Sonnet for others
-            const model = claudeSettings.speed === 1 ? 'claude-opus-4-5-20250101' : 'claude-sonnet-4-20250514'
+            const model = claudeSettings.speed === 3 
+              ? 'claude-sonnet-4-20250514' 
+              : 'claude-opus-4-5-20250101'
+            
+            const modelDisplay = claudeSettings.speed === 3 ? 'Sonnet 4' : 'Opus 4.5'
             
             const response = await fetch('https://api.anthropic.com/v1/messages', {
               method: 'POST',
@@ -217,9 +239,9 @@ export async function POST(request: Request) {
               },
               body: JSON.stringify({
                 model,
-                max_tokens: getMaxTokens(claudeSettings.speed),
+                max_tokens: getMaxTokens(claudeSettings.speed, claudeSettings.verbosity),
                 temperature: getTemperature(claudeSettings.creativity),
-                system: buildSystemPrompt('Claude', 'Gemini', claudeSettings, geminiSettings, scribeContext, refreshedAgents.claude || false),
+                system: buildClaudeSystemPrompt(claudeSettings, geminiSettings, scribeContext, refreshedAgents.claude || false),
                 messages: [{ role: 'user', content: prompt }]
               })
             })
@@ -228,9 +250,13 @@ export async function POST(request: Request) {
             const text = data.content?.[0]?.text || ''
             const { thinking, content } = parseThinking(text)
             
+            const inputTokens = data.usage?.input_tokens || 0
+            const outputTokens = data.usage?.output_tokens || 0
+            const cost = calculateCost(model, inputTokens, outputTokens)
+            
             if (thinking) {
               send({ agent: 'claude', type: 'thinking', content: thinking })
-              await new Promise(r => setTimeout(r, 500))
+              await new Promise(r => setTimeout(r, 400))
             }
             
             send({
@@ -238,48 +264,62 @@ export async function POST(request: Request) {
               type: 'complete',
               content,
               thinking,
-              tokens: { in: data.usage?.input_tokens || 0, out: data.usage?.output_tokens || 0 }
+              model: modelDisplay,
+              modelId: model,
+              tokens: { in: inputTokens, out: outputTokens },
+              cost
             })
             
             return content
           }
           
-          // Helper to call Gemini
-          const callGemini = async (prompt: string, isFirst: boolean) => {
+          const callGemini = async (prompt: string) => {
             send({ agent: 'gemini', type: 'thinking', content: 'considering...' })
             
-            // Use Gemini Pro for deep mode, Flash for fast
-            const model = geminiSettings.speed === 3 ? 'gemini-2.0-flash' : 'gemini-2.0-flash'
+            // Gemini 3 models
+            const model = geminiSettings.speed === 3 
+              ? 'gemini-3.0-flash'
+              : 'gemini-3.0-pro'
+            
+            const modelDisplay = geminiSettings.speed === 3 ? 'Flash 3' : 'Pro 3'
+            
+            // Use the actual API model name (may need adjustment based on Google's naming)
+            const apiModel = geminiSettings.speed === 3 
+              ? 'gemini-2.0-flash' // Fallback until Gemini 3 is available
+              : 'gemini-2.5-pro-preview-06-05' // Fallback until Gemini 3 is available
+            
+            const systemPrompt = buildGeminiSystemPrompt(geminiSettings, claudeSettings, scribeContext, refreshedAgents.gemini || false)
             
             const response = await fetch(
-              `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${keys.google!}`,
+              `https://generativelanguage.googleapis.com/v1beta/models/${apiModel}:generateContent?key=${keys.google!}`,
               {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                   contents: [{
                     role: 'user',
-                    parts: [{ text: `${buildSystemPrompt('Gemini', 'Claude', geminiSettings, claudeSettings, scribeContext, refreshedAgents.gemini || false)}\n\n${prompt}` }]
+                    parts: [{ text: `${systemPrompt}\n\n---\n\n${prompt}` }]
                   }],
                   generationConfig: {
                     temperature: getTemperature(geminiSettings.creativity),
-                    maxOutputTokens: getMaxTokens(geminiSettings.speed)
+                    maxOutputTokens: getMaxTokens(geminiSettings.speed, geminiSettings.verbosity)
                   }
                 })
               }
             )
 
             const data = await response.json()
-            const text = data.candidates?.[0]?.content?.parts?.[0]?.text || ''
-            const { thinking, content } = parseThinking(text)
+            const rawText = data.candidates?.[0]?.content?.parts?.[0]?.text || ''
+            const cleanedText = cleanGeminiResponse(rawText)
+            const { thinking, content } = parseThinking(cleanedText)
             
-            // Estimate tokens
-            const inputTokens = Math.ceil(prompt.length / 4)
-            const outputTokens = Math.ceil(text.length / 4)
+            const inputTokens = data.usageMetadata?.promptTokenCount || Math.ceil(prompt.length / 4)
+            const outputTokens = data.usageMetadata?.candidatesTokenCount || Math.ceil(cleanedText.length / 4)
+            const cost = calculateCost(model, inputTokens, outputTokens)
             
             if (thinking) {
               send({ agent: 'gemini', type: 'thinking', content: thinking })
-              await new Promise(r => setTimeout(r, 500))
+              await new Promise(r => setTimeout(r, 400))
             }
             
             send({
@@ -287,44 +327,45 @@ export async function POST(request: Request) {
               type: 'complete',
               content,
               thinking,
-              tokens: { in: inputTokens, out: outputTokens }
+              model: modelDisplay,
+              modelId: model,
+              tokens: { in: inputTokens, out: outputTokens },
+              cost
             })
             
             return content
           }
 
-          // Execute based on order and bias
           if (claudeFirst) {
             if (claudeResponds) {
               const prompt = history
                 ? `${history}\n\nDirector: ${latestMessage.content}\n\nRespond as Claude:`
                 : `Director: ${latestMessage.content}\n\nRespond as Claude:`
-              firstAgentResponse = await callClaude(prompt, true)
+              firstAgentResponse = await callClaude(prompt)
             }
             
             if (geminiResponds) {
               const prompt = firstAgentResponse
-                ? `${history}\n\nDirector: ${latestMessage.content}\n\nClaude: ${firstAgentResponse}\n\nRespond as Gemini, engaging with both the Director and Claude:`
+                ? `${history}\n\nDirector: ${latestMessage.content}\n\nClaude: ${firstAgentResponse}\n\nRespond as Gemini, engaging with both Director and Claude:`
                 : `${history}\n\nDirector: ${latestMessage.content}\n\nRespond as Gemini:`
-              await callGemini(prompt, !claudeResponds)
+              await callGemini(prompt)
             }
           } else {
             if (geminiResponds) {
               const prompt = history
                 ? `${history}\n\nDirector: ${latestMessage.content}\n\nRespond as Gemini:`
                 : `Director: ${latestMessage.content}\n\nRespond as Gemini:`
-              firstAgentResponse = await callGemini(prompt, true)
+              firstAgentResponse = await callGemini(prompt)
             }
             
             if (claudeResponds) {
               const prompt = firstAgentResponse
-                ? `${history}\n\nDirector: ${latestMessage.content}\n\nGemini: ${firstAgentResponse}\n\nRespond as Claude, engaging with both the Director and Gemini:`
+                ? `${history}\n\nDirector: ${latestMessage.content}\n\nGemini: ${firstAgentResponse}\n\nRespond as Claude, engaging with both Director and Gemini:`
                 : `${history}\n\nDirector: ${latestMessage.content}\n\nRespond as Claude:`
-              await callClaude(prompt, !geminiResponds)
+              await callClaude(prompt)
             }
           }
 
-          // Generate scribe notes periodically (every 4+ messages)
           if (messages.length >= 4 && messages.length % 4 === 0) {
             const scribeNotes = await generateScribeSummary(messages, keys.google!, scribeContext)
             if (scribeNotes) {
