@@ -17,6 +17,7 @@ interface Attachment {
   name: string
   url: string
   base64?: string
+  mimeType?: string
 }
 
 interface Message {
@@ -97,6 +98,9 @@ interface AgentState {
 }
 
 const defaultSettings: AgentSettings = { verbosity: 2, creativity: 2, tension: 2, speed: 2 }
+
+// Version timestamp - update this on each deploy
+const BUILD_VERSION = '2026-01-02 18:52 PST'
 
 function getDeviceType(): 'desktop' | 'mobile' {
   if (typeof window === 'undefined') return 'desktop'
@@ -307,6 +311,8 @@ function getScribeModelName(): string {
 
 // Stats Modal
 function StatsModal({ stats, topic, onClose }: { stats: ConversationStats; topic: string; onClose: () => void }) {
+  const totalTokens = stats.claudeTokensIn + stats.claudeTokensOut + stats.geminiTokensIn + stats.geminiTokensOut
+  
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={onClose}>
       <div className="bg-white rounded-xl p-5 max-w-md w-full mx-4 max-h-[80vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
@@ -330,6 +336,25 @@ function StatsModal({ stats, topic, onClose }: { stats: ConversationStats; topic
               <div>Sessions: <span className="font-medium text-gray-900">{stats.sessions.length}</span></div>
               <div>Duration: <span className="font-medium text-gray-900">{formatDuration(stats.totalDuration)}</span></div>
               <div className="flex items-center gap-1">Device: {stats.deviceType === 'desktop' ? <Monitor className="w-4 h-4" /> : <Smartphone className="w-4 h-4" />}<span className="font-medium text-gray-900 capitalize">{stats.deviceType}</span></div>
+            </div>
+          </div>
+          
+          {/* Token Usage */}
+          <div className="bg-yellow-50 rounded-lg p-3">
+            <div className="font-medium text-yellow-700 mb-2">Token Usage</div>
+            <div className="space-y-1 text-gray-600">
+              <div className="flex justify-between">
+                <span>Total tokens:</span>
+                <span className="font-bold text-yellow-700">{totalTokens.toLocaleString()}</span>
+              </div>
+              <div className="flex justify-between text-xs">
+                <span className="flex items-center gap-1"><ClaudeLogo className="w-3 h-3" /> Claude:</span>
+                <span>↓{stats.claudeTokensIn.toLocaleString()} ↑{stats.claudeTokensOut.toLocaleString()}</span>
+              </div>
+              <div className="flex justify-between text-xs">
+                <span className="flex items-center gap-1"><GeminiLogo className="w-3 h-3" /> Gemini:</span>
+                <span>↓{stats.geminiTokensIn.toLocaleString()} ↑{stats.geminiTokensOut.toLocaleString()}</span>
+              </div>
             </div>
           </div>
           
@@ -377,6 +402,7 @@ function StatsModal({ stats, topic, onClose }: { stats: ConversationStats; topic
                   <span key={i} className="px-2 py-1 bg-purple-100 text-purple-700 rounded text-xs">{model}</span>
                 ))}
               </div>
+              <div className="text-xs text-purple-500 mt-2">Scribe: {getScribeModelName()}</div>
             </div>
           )}
         </div>
@@ -539,6 +565,7 @@ export default function LoungePage() {
     try {
       for (const file of Array.from(files)) {
         const isImage = file.type.startsWith('image/')
+        const mimeType = file.type || (isImage ? 'image/jpeg' : 'application/octet-stream')
         
         // Create object URL for preview
         const url = URL.createObjectURL(file)
@@ -560,7 +587,8 @@ export default function LoungePage() {
           type: isImage ? 'image' : 'file', 
           name: file.name, 
           url, 
-          base64 
+          base64,
+          mimeType
         }])
       }
     } catch (error) {
@@ -681,18 +709,31 @@ export default function LoungePage() {
       textareaRef.current.style.height = '44px'
     }
     
+    // Build content with attachment descriptions
     let fullContent = messageText
-    if (currentAttachments.length > 0) fullContent = `${currentAttachments.map(a => `[${a.type === 'image' ? 'Image' : 'File'}: ${a.name}]`).join(' ')} ${messageText}`.trim()
+    if (currentAttachments.length > 0) {
+      fullContent = `${currentAttachments.map(a => `[${a.type === 'image' ? 'Image' : 'File'}: ${a.name}]`).join(' ')} ${messageText}`.trim()
+    }
+    
     if (!isPoke) addMessage('user', fullContent, undefined, undefined, undefined, undefined, undefined, undefined, currentAttachments)
 
     abortControllerRef.current = new AbortController()
 
     try {
+      // Prepare attachments data for API (include base64 for images)
+      const attachmentsForApi = currentAttachments.map(a => ({
+        type: a.type,
+        name: a.name,
+        base64: a.base64,
+        mimeType: a.mimeType || (a.type === 'image' ? 'image/jpeg' : 'application/octet-stream')
+      }))
+      
       const response = await fetch('/api/lounge/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           messages: [...messages, { role: 'user', content: fullContent }],
+          attachments: attachmentsForApi,
           agents: { claude: agents.claude.settings, gemini: agents.gemini.settings },
           bias: agentPriority,
           scribeContext: scribeNotes.map(n => n.content).join('\n\n'),
@@ -756,7 +797,10 @@ export default function LoungePage() {
             <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-orange-400 via-purple-500 to-blue-500 flex items-center justify-center">
               <MessageSquare className="w-4 h-4 text-white" />
             </div>
-            <span className="font-semibold text-gray-800">Lounge</span>
+            <div>
+              <span className="font-semibold text-gray-800">Lounge</span>
+              <div className="text-[10px] text-gray-400">{BUILD_VERSION}</div>
+            </div>
           </div>
         </div>
         <div className="flex items-center gap-2">
@@ -839,9 +883,13 @@ export default function LoungePage() {
                     <div className="text-sm text-gray-500">
                       <div className="font-medium">{conversations.find(c => c.id === activeConversationId)?.title}</div>
                       <div className="mt-2">{currentStats.totalMessages} messages • {formatDuration(currentStats.totalDuration)} • {currentStats.sessions.length} session(s)</div>
+                      <div className="mt-1 text-yellow-600">
+                        Total tokens: {(currentStats.claudeTokensIn + currentStats.claudeTokensOut + currentStats.geminiTokensIn + currentStats.geminiTokensOut).toLocaleString()}
+                      </div>
                       <div className="mt-1 text-green-600">Estimated cost: {currentStats.totalCost < 0.01 ? 'near zero' : `$${currentStats.totalCost.toFixed(3)}`}</div>
                       <div className="text-xs text-gray-400 mt-1">(Claude: {currentStats.claudeCost < 0.01 ? '~$0' : `$${currentStats.claudeCost.toFixed(3)}`}, Gemini: {currentStats.geminiCost < 0.01 ? '~$0' : `$${currentStats.geminiCost.toFixed(3)}`})</div>
                       {currentStats.modelsUsed.length > 0 && <div className="text-xs text-gray-400 mt-1">Models: {currentStats.modelsUsed.join(', ')}</div>}
+                      <div className="text-xs text-gray-400 mt-1">Scribe: {getScribeModelName()}</div>
                       <div className="flex items-center justify-center gap-1 text-xs text-gray-400 mt-1">{currentStats.deviceType === 'desktop' ? <Monitor className="w-3 h-3" /> : <Smartphone className="w-3 h-3" />}{currentStats.deviceType}</div>
                     </div>
                     <button onClick={resumeConversation} className="px-4 py-2 bg-blue-500 text-white text-sm rounded-lg hover:bg-blue-600 flex items-center gap-2 mx-auto">
@@ -855,8 +903,9 @@ export default function LoungePage() {
             {currentThinking && (
               <div className="flex justify-start">
                 <div className={`rounded-2xl px-4 py-3 text-sm ${currentThinking.agent === 'claude' ? 'bg-orange-50/50' : 'bg-blue-50/50'}`}>
-                  <span className={`${currentThinking.agent === 'claude' ? 'text-orange-400' : 'text-blue-400'} animate-pulse`}>{currentThinking.agent === 'claude' ? 'Claude' : 'Gemini'} thinking...</span>
-                  <span className="text-gray-400 italic ml-2">"{currentThinking.text}"</span>
+                  <span className={`${currentThinking.agent === 'claude' ? 'text-orange-400' : 'text-blue-400'} animate-pulse`}>
+                    {currentThinking.agent === 'claude' ? 'Claude' : 'Gemini'} is typing...
+                  </span>
                 </div>
               </div>
             )}
