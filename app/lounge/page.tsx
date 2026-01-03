@@ -412,6 +412,7 @@ export default function LoungePage() {
   const [sessionStartTime, setSessionStartTime] = useState<Date | null>(null)
   
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const textareaRef = useRef<HTMLTextAreaElement>(null)
   const abortControllerRef = useRef<AbortController | null>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   
@@ -426,6 +427,15 @@ export default function LoungePage() {
   }
 
   useEffect(() => { messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [messages, currentThinking])
+
+  // Auto-resize textarea
+  useEffect(() => {
+    if (textareaRef.current) {
+      textareaRef.current.style.height = '44px'
+      const scrollHeight = textareaRef.current.scrollHeight
+      textareaRef.current.style.height = Math.min(scrollHeight, 120) + 'px'
+    }
+  }, [input])
 
   // Load
   useEffect(() => {
@@ -524,17 +534,43 @@ export default function LoungePage() {
 
   const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files
-    if (!files) return
-    for (const file of Array.from(files)) {
-      const isImage = file.type.startsWith('image/')
-      const reader = new FileReader()
-      reader.onload = () => {
-        const base64 = (reader.result as string).split(',')[1]
-        setAttachments(prev => [...prev, { id: crypto.randomUUID(), type: isImage ? 'image' : 'file', name: file.name, url: URL.createObjectURL(file), base64 }])
+    if (!files || files.length === 0) return
+    
+    try {
+      for (const file of Array.from(files)) {
+        const isImage = file.type.startsWith('image/')
+        
+        // Create object URL for preview
+        const url = URL.createObjectURL(file)
+        
+        // Read file as base64
+        const base64 = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader()
+          reader.onload = () => {
+            const result = reader.result as string
+            const base64Data = result.split(',')[1]
+            resolve(base64Data)
+          }
+          reader.onerror = () => reject(new Error('Failed to read file'))
+          reader.readAsDataURL(file)
+        })
+        
+        setAttachments(prev => [...prev, { 
+          id: crypto.randomUUID(), 
+          type: isImage ? 'image' : 'file', 
+          name: file.name, 
+          url, 
+          base64 
+        }])
       }
-      reader.readAsDataURL(file)
+    } catch (error) {
+      console.error('File upload error:', error)
     }
-    e.target.value = ''
+    
+    // Reset input
+    if (e.target) {
+      e.target.value = ''
+    }
   }
 
   const endConversation = () => {
@@ -639,6 +675,11 @@ export default function LoungePage() {
     setInput('')
     setAttachments([])
     setIsProcessing(true)
+    
+    // Reset textarea height
+    if (textareaRef.current) {
+      textareaRef.current.style.height = '44px'
+    }
     
     let fullContent = messageText
     if (currentAttachments.length > 0) fullContent = `${currentAttachments.map(a => `[${a.type === 'image' ? 'Image' : 'File'}: ${a.name}]`).join(' ')} ${messageText}`.trim()
@@ -838,23 +879,38 @@ export default function LoungePage() {
           <form onSubmit={handleSubmit} className="p-4 border-t border-gray-200 bg-white">
             {isConversationEnded ? (
               <div className="text-center text-sm text-gray-400 py-2">
-                Conversation ended. <button onClick={resumeConversation} className="text-blue-500 hover:underline">Resume</button> or <button onClick={() => startNewConversation()} className="text-blue-500 hover:underline">start new</button>
+                Conversation ended. <button type="button" onClick={resumeConversation} className="text-blue-500 hover:underline">Resume</button> or <button type="button" onClick={() => startNewConversation()} className="text-blue-500 hover:underline">start new</button>
               </div>
             ) : (
               <div className="flex gap-3 items-end">
-                <input type="file" ref={fileInputRef} onChange={handleFileSelect} multiple accept="image/*,.pdf,.txt,.md" className="hidden" />
-                <button type="button" onClick={() => fileInputRef.current?.click()} className="p-2.5 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg"><Paperclip className="w-5 h-5" /></button>
-                <textarea value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={handleKeyDown} placeholder="Type a message..." className="flex-1 px-4 py-2.5 text-sm rounded-xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none min-h-[44px] max-h-[120px]" rows={1} disabled={isProcessing}
-                  onInput={(e) => { const t = e.target as HTMLTextAreaElement; t.style.height = 'auto'; t.style.height = Math.min(t.scrollHeight, 120) + 'px' }} />
-                {messages.length > 0 && !isProcessing && (
-                  <button type="button" onClick={endConversation} className="p-2.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg" title="End conversation">
-                    <PhoneOff className="w-5 h-5" />
+                <input type="file" ref={fileInputRef} onChange={handleFileSelect} multiple accept="image/*,.pdf,.txt,.md,.csv,.json" className="hidden" />
+                <button type="button" onClick={() => fileInputRef.current?.click()} className="p-2.5 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg flex-shrink-0">
+                  <Paperclip className="w-5 h-5" />
+                </button>
+                <textarea 
+                  ref={textareaRef}
+                  value={input} 
+                  onChange={(e) => setInput(e.target.value)} 
+                  onKeyDown={handleKeyDown} 
+                  placeholder="Type a message..." 
+                  className="flex-1 px-4 py-2.5 text-sm rounded-xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none" 
+                  style={{ minHeight: '44px', maxHeight: '120px', height: '44px' }}
+                  rows={1} 
+                  disabled={isProcessing}
+                />
+                {isProcessing ? (
+                  <button type="button" onClick={handleHush} className="p-2.5 bg-red-500 text-white rounded-lg flex-shrink-0">
+                    <Square className="w-5 h-5" />
+                  </button>
+                ) : (
+                  <button type="submit" disabled={!input.trim() && attachments.length === 0} className="p-2.5 bg-blue-500 text-white rounded-lg disabled:opacity-40 flex-shrink-0">
+                    <Send className="w-5 h-5" />
                   </button>
                 )}
-                {isProcessing ? (
-                  <button type="button" onClick={handleHush} className="p-2.5 bg-red-500 text-white rounded-lg"><Square className="w-5 h-5" /></button>
-                ) : (
-                  <button type="submit" disabled={!input.trim() && attachments.length === 0} className="p-2.5 bg-blue-500 text-white rounded-lg disabled:opacity-40"><Send className="w-5 h-5" /></button>
+                {messages.length > 0 && !isProcessing && (
+                  <button type="button" onClick={endConversation} className="p-2.5 bg-red-500 text-white rounded-lg flex-shrink-0" title="End conversation">
+                    <PhoneOff className="w-5 h-5" />
+                  </button>
                 )}
               </div>
             )}

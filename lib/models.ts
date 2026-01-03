@@ -96,7 +96,7 @@ export const GEMINI_MODELS: ModelConfig[] = [
     contextWindow: 1000000,
     maxOutput: 65536,
     capabilities: { thinking: true, vision: true, tools: true },
-    apiConfig: { thinkingLevel: 'minimal' },
+    apiConfig: { thinkingLevel: 'low' },  // Pro only supports 'low' or 'high', not 'minimal'
     released: '2025-11-01'
   },
   {
