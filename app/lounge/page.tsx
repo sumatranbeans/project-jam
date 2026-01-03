@@ -311,7 +311,7 @@ function StatsModal({ stats, topic, onClose }: { stats: ConversationStats; topic
 }
 
 const STORAGE_KEY = 'lounge-data-v7'
-const SCRIBE_MODEL = 'Gemini 2.0 Flash'
+const SCRIBE_MODEL = 'Gemini 3 Flash'
 
 export default function LoungePage() {
   const { user, isLoaded } = useUser()

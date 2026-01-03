@@ -5,10 +5,10 @@ export const runtime = 'edge'
 
 // Pricing per 1M tokens
 const PRICING = {
-  'claude-opus-4-5-20250101': { input: 15.00, output: 75.00 },
+  'claude-opus-4-5-20251101': { input: 5.00, output: 25.00 },
   'claude-sonnet-4-20250514': { input: 3.00, output: 15.00 },
-  'gemini-2.5-pro-preview-06-05': { input: 1.25, output: 5.00 },
-  'gemini-2.0-flash': { input: 0.10, output: 0.40 }
+  'gemini-3-pro-preview': { input: 1.25, output: 10.00 },
+  'gemini-3-flash-preview': { input: 0.50, output: 3.00 }
 }
 
 interface AgentSettings {
@@ -144,7 +144,7 @@ Write a concise summary (under 100 words) capturing main topic, key points from 
 
   try {
     const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${googleKey}`,
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent?key=${googleKey}`,
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -210,7 +210,7 @@ export async function POST(request: Request) {
             
             const model = claudeSettings.speed === 3 
               ? 'claude-sonnet-4-20250514' 
-              : 'claude-opus-4-5-20250101'
+              : 'claude-opus-4-5-20251101'
             
             const modelDisplay = claudeSettings.speed === 3 ? 'Sonnet 4' : 'Opus 4.5'
             
@@ -273,12 +273,12 @@ export async function POST(request: Request) {
           const callGemini = async (prompt: string): Promise<string> => {
             send({ agent: 'gemini', type: 'thinking', content: 'considering...' })
             
-            // Use actual available models
+            // Use Gemini 3 models
             const model = geminiSettings.speed === 3 
-              ? 'gemini-2.0-flash'
-              : 'gemini-2.5-pro-preview-06-05'
+              ? 'gemini-3-flash-preview'
+              : 'gemini-3-pro-preview'
             
-            const modelDisplay = geminiSettings.speed === 3 ? 'Flash 2.0' : 'Pro 2.5'
+            const modelDisplay = geminiSettings.speed === 3 ? 'Flash 3' : 'Pro 3'
             
             const systemPrompt = buildGeminiSystemPrompt(geminiSettings, claudeSettings, scribeContext, refreshedAgents.gemini || false)
             
