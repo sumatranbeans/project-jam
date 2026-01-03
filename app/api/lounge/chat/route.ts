@@ -215,6 +215,17 @@ export async function POST(request: Request) {
       refreshedAgents = {} 
     } = body
     
+    // Log attachment info for debugging
+    if (attachments.length > 0) {
+      console.log('Attachments received:', attachments.map((a: Attachment) => ({
+        type: a.type,
+        name: a.name,
+        mimeType: a.mimeType,
+        hasBase64: !!a.base64,
+        base64Length: a.base64?.length || 0
+      })))
+    }
+    
     const claudeSettings: AgentSettings = agents.claude
     const geminiSettings: AgentSettings = agents.gemini
 
@@ -434,7 +445,8 @@ export async function POST(request: Request) {
 
         } catch (error) {
           console.error('Stream error:', error)
-          send({ type: 'error', content: 'An error occurred.' })
+          const errorMessage = error instanceof Error ? error.message : 'Unknown error'
+          send({ type: 'error', content: `Error: ${errorMessage}` })
         }
 
         controller.close()

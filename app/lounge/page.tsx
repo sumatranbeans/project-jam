@@ -99,8 +99,8 @@ interface AgentState {
 
 const defaultSettings: AgentSettings = { verbosity: 2, creativity: 2, tension: 2, speed: 2 }
 
-// Version timestamp - update this on each deploy
-const BUILD_VERSION = '2026-01-02 18:52 PST'
+// Version - shows when this code was last updated
+const BUILD_VERSION = 'v10.2'
 
 function getDeviceType(): 'desktop' | 'mobile' {
   if (typeof window === 'undefined') return 'desktop'
@@ -753,8 +753,14 @@ export default function LoungePage() {
         for (const line of decoder.decode(value).split('\n').filter(l => l.startsWith('data: '))) {
           try {
             const data = JSON.parse(line.slice(6))
-            if (data.type === 'thinking') { setActiveAgent(data.agent); setCurrentThinking({ agent: data.agent, text: data.content }) }
-            else if (data.type === 'complete') {
+            if (data.type === 'thinking') { 
+              setActiveAgent(data.agent)
+              setCurrentThinking({ agent: data.agent, text: data.content }) 
+            } else if (data.type === 'error') {
+              // Handle error from API
+              console.error('API error:', data.content)
+              addMessage('system', data.content || 'An error occurred.')
+            } else if (data.type === 'complete') {
               setCurrentThinking(null)
               addMessage(data.agent, data.content, data.thinking, data.model, data.modelId, data.tokens?.in, data.tokens?.out, data.cost)
               const agentKey = data.agent as 'claude' | 'gemini'
