@@ -4,10 +4,10 @@ import { useUser, SignOutButton } from '@clerk/nextjs'
 import { useRouter } from 'next/navigation'
 import { useState, useCallback, useRef, useEffect } from 'react'
 import { 
-  MessageSquare, LogOut, Settings, Send, Square, MessageCircle,
+  MessageSquare, LogOut, Settings, Send, Square,
   Copy, ThumbsUp, ThumbsDown, Plus, Clock, ChevronDown, ChevronUp, Check,
-  Paperclip, X, FileText, ExternalLink, RotateCcw, DollarSign, Share2,
-  PanelLeftClose, PanelLeft, Monitor, Smartphone, BarChart3
+  Paperclip, X, FileText, ExternalLink, RotateCcw, Share2,
+  PanelLeftClose, PanelLeft, Monitor, Smartphone, BarChart3, PhoneOff
 } from 'lucide-react'
 
 // Types
@@ -65,8 +65,7 @@ interface ConversationStats {
   sessions: Session[]
   modelsUsed: string[]
   deviceType: 'desktop' | 'mobile'
-  firstMessageAt?: Date
-  lastMessageAt?: Date
+  topic?: string
 }
 
 interface Conversation {
@@ -76,10 +75,8 @@ interface Conversation {
   scribeNotes: ScribeNote[]
   stats?: ConversationStats
   sessions: Session[]
-  currentSessionId?: string
   isEnded: boolean
   createdAt: Date
-  endedAt?: Date
 }
 
 interface AgentSettings {
@@ -101,13 +98,12 @@ interface AgentState {
 
 const defaultSettings: AgentSettings = { verbosity: 2, creativity: 2, tension: 2, speed: 2 }
 
-// Detect device type
 function getDeviceType(): 'desktop' | 'mobile' {
   if (typeof window === 'undefined') return 'desktop'
   return window.innerWidth < 768 ? 'mobile' : 'desktop'
 }
 
-// Claude Logo
+// Logos
 function ClaudeLogo({ className }: { className?: string }) {
   return (
     <svg viewBox="0 0 1200 1200" className={className} fill="#d97757">
@@ -116,7 +112,6 @@ function ClaudeLogo({ className }: { className?: string }) {
   )
 }
 
-// Gemini Logo
 function GeminiLogo({ className }: { className?: string }) {
   return (
     <svg viewBox="0 0 65 65" className={className} fill="none">
@@ -130,7 +125,6 @@ function GeminiLogo({ className }: { className?: string }) {
   )
 }
 
-// Flash Logo
 function FlashLogo({ className }: { className?: string }) {
   return (
     <svg viewBox="0 0 24 24" className={className} fill="#FBBC04">
@@ -146,31 +140,31 @@ function ThreePointSlider({ value, onChange, labels, color = 'gray' }: {
   const dotColors = { orange: 'bg-orange-500', blue: 'bg-blue-500', gray: 'bg-gray-500' }
   return (
     <div className="w-full">
-      <div className="relative h-5 flex items-center">
+      <div className="relative h-6 flex items-center">
         <div className="absolute inset-x-0 h-px bg-gray-200" />
         <div className={`absolute h-px ${dotColors[color]} transition-all`} style={{ left: 0, width: value === 1 ? '0%' : value === 2 ? '50%' : '100%' }} />
         {[1, 2, 3].map((v) => (
-          <button key={v} onClick={() => onChange(v)} className={`absolute w-2.5 h-2.5 rounded-full border-2 transition-all ${v <= value ? `${dotColors[color]} border-transparent` : 'bg-white border-gray-300 hover:border-gray-400'}`}
-            style={{ left: v === 1 ? '0%' : v === 2 ? 'calc(50% - 5px)' : 'calc(100% - 10px)' }} />
+          <button key={v} onClick={() => onChange(v)} className={`absolute w-3 h-3 rounded-full border-2 transition-all ${v <= value ? `${dotColors[color]} border-transparent` : 'bg-white border-gray-300 hover:border-gray-400'}`}
+            style={{ left: v === 1 ? '0%' : v === 2 ? 'calc(50% - 6px)' : 'calc(100% - 12px)' }} />
         ))}
       </div>
-      <div className="flex justify-between text-[8px] text-gray-400 -mt-0.5">{labels.map((l, i) => <span key={i}>{l}</span>)}</div>
+      <div className="flex justify-between text-[10px] text-gray-400 mt-0.5">{labels.map((l, i) => <span key={i}>{l}</span>)}</div>
     </div>
   )
 }
 
-// 5-point priority selector
+// 5-point priority
 function AgentPrioritySelector({ value, onChange }: { value: number; onChange: (v: number) => void }) {
   return (
     <div className="w-full">
-      <div className="relative h-5 flex items-center">
+      <div className="relative h-6 flex items-center">
         <div className="absolute inset-x-0 h-px bg-gradient-to-r from-orange-300 via-gray-200 to-blue-300" />
         {[-2, -1, 0, 1, 2].map((v) => (
-          <button key={v} onClick={() => onChange(v)} className={`absolute w-2.5 h-2.5 rounded-full border-2 transition-all ${v === value ? v < 0 ? 'bg-orange-500 border-orange-500' : v > 0 ? 'bg-blue-500 border-blue-500' : 'bg-gray-500 border-gray-500' : 'bg-white border-gray-300 hover:border-gray-400'}`}
-            style={{ left: `calc(${(v + 2) * 25}% - 5px)` }} />
+          <button key={v} onClick={() => onChange(v)} className={`absolute w-3 h-3 rounded-full border-2 transition-all ${v === value ? v < 0 ? 'bg-orange-500 border-orange-500' : v > 0 ? 'bg-blue-500 border-blue-500' : 'bg-gray-500 border-gray-500' : 'bg-white border-gray-300 hover:border-gray-400'}`}
+            style={{ left: `calc(${(v + 2) * 25}% - 6px)` }} />
         ))}
       </div>
-      <div className="flex justify-between text-[7px] text-gray-400 -mt-0.5">
+      <div className="flex justify-between text-[9px] text-gray-400 mt-0.5">
         <span className="text-orange-500">Only</span><span className="text-orange-400">+</span><span>Both</span><span className="text-blue-400">+</span><span className="text-blue-500">Only</span>
       </div>
     </div>
@@ -180,16 +174,15 @@ function AgentPrioritySelector({ value, onChange }: { value: number; onChange: (
 // Code block
 function CodeBlock({ code, language }: { code: string; language?: string }) {
   const [copied, setCopied] = useState(false)
-  const handleCopy = () => { navigator.clipboard.writeText(code); setCopied(true); setTimeout(() => setCopied(false), 2000) }
   return (
     <div className="relative my-2 rounded-lg overflow-hidden bg-gray-900 text-gray-100">
-      <div className="flex justify-between items-center px-3 py-1 bg-gray-800 text-[10px]">
+      <div className="flex justify-between items-center px-3 py-1.5 bg-gray-800 text-xs">
         <span className="text-gray-400">{language || 'code'}</span>
-        <button onClick={handleCopy} className="flex items-center gap-1 text-gray-400 hover:text-white">
-          {copied ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}{copied ? 'Copied' : 'Copy'}
+        <button onClick={() => { navigator.clipboard.writeText(code); setCopied(true); setTimeout(() => setCopied(false), 2000) }} className="flex items-center gap-1 text-gray-400 hover:text-white">
+          {copied ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}{copied ? 'Copied' : 'Copy'}
         </button>
       </div>
-      <pre className="p-3 overflow-x-auto text-[11px] leading-relaxed"><code>{code}</code></pre>
+      <pre className="p-3 overflow-x-auto text-sm leading-relaxed"><code>{code}</code></pre>
     </div>
   )
 }
@@ -204,7 +197,7 @@ function FormattedText({ content }: { content: string }) {
     const tableMatch = remaining.match(/^(\|[^\n]+\|\n\|[-:\s|]+\|\n(?:\|[^\n]+\|\n?)+)/)
     if (tableMatch) {
       const lines = tableMatch[1].trim().split('\n'), headers = lines[0].split('|').filter(c => c.trim()), rows = lines.slice(2).map(row => row.split('|').filter(c => c.trim()))
-      elements.push(<table key={key++} className="text-[10px] border-collapse w-full my-2"><thead><tr className="bg-gray-100">{headers.map((h, i) => <th key={i} className="border border-gray-200 px-2 py-1 text-left font-medium">{h.trim()}</th>)}</tr></thead><tbody>{rows.map((row, i) => <tr key={i} className={i % 2 === 0 ? '' : 'bg-gray-50'}>{row.map((cell, j) => <td key={j} className="border border-gray-200 px-2 py-1">{cell.trim()}</td>)}</tr>)}</tbody></table>)
+      elements.push(<table key={key++} className="text-sm border-collapse w-full my-2"><thead><tr className="bg-gray-100">{headers.map((h, i) => <th key={i} className="border border-gray-200 px-3 py-1.5 text-left font-medium">{h.trim()}</th>)}</tr></thead><tbody>{rows.map((row, i) => <tr key={i} className={i % 2 === 0 ? '' : 'bg-gray-50'}>{row.map((cell, j) => <td key={j} className="border border-gray-200 px-3 py-1.5">{cell.trim()}</td>)}</tr>)}</tbody></table>)
       remaining = remaining.slice(tableMatch[0].length); continue
     }
     const nextCode = remaining.indexOf('```'), nextTable = remaining.search(/\n\|[^\n]+\|/)
@@ -223,99 +216,90 @@ function renderInlineFormatting(text: string): React.ReactNode[] {
     if (!part) return null
     if (part.startsWith('**') && part.endsWith('**')) return <strong key={i} className="font-semibold">{part.slice(2, -2)}</strong>
     if (part.startsWith('*') && part.endsWith('*') && !part.startsWith('**')) return <em key={i}>{part.slice(1, -1)}</em>
-    if (part.startsWith('`') && part.endsWith('`')) return <code key={i} className="bg-gray-100 px-1 rounded text-[10px] font-mono">{part.slice(1, -1)}</code>
+    if (part.startsWith('`') && part.endsWith('`')) return <code key={i} className="bg-gray-100 px-1.5 py-0.5 rounded text-sm font-mono">{part.slice(1, -1)}</code>
     const linkMatch = part.match(/\[([^\]]+)\]\(([^)]+)\)/)
-    if (linkMatch) return <a key={i} href={linkMatch[2]} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline inline-flex items-center gap-0.5">{linkMatch[1]}<ExternalLink className="w-2.5 h-2.5" /></a>
+    if (linkMatch) return <a key={i} href={linkMatch[2]} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline inline-flex items-center gap-0.5">{linkMatch[1]}<ExternalLink className="w-3 h-3" /></a>
     return part
   }).filter(Boolean)
 }
 
 function formatTime(date: Date): string { return date.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true }) }
-function formatDuration(minutes: number): string { return minutes < 60 ? `${minutes}m` : `${Math.floor(minutes / 60)}h ${minutes % 60}m` }
-function formatCost(cost: number): string { return cost < 0.001 ? '<$0.001' : cost < 0.01 ? `$${cost.toFixed(4)}` : `$${cost.toFixed(3)}` }
+function formatDuration(minutes: number): string { return minutes < 60 ? `${minutes} min` : `${Math.floor(minutes / 60)}h ${minutes % 60}m` }
+function formatCost(cost: number): string { 
+  if (cost < 0.01) return 'near zero'
+  return `$${cost.toFixed(2)}` 
+}
 
-// Stats for Nerds Modal
-function StatsModal({ stats, onClose }: { stats: ConversationStats; onClose: () => void }) {
+// Stats Modal
+function StatsModal({ stats, topic, onClose }: { stats: ConversationStats; topic: string; onClose: () => void }) {
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={onClose}>
-      <div className="bg-white rounded-xl p-4 max-w-md w-full mx-4 max-h-[80vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+      <div className="bg-white rounded-xl p-5 max-w-md w-full mx-4 max-h-[80vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
         <div className="flex items-center justify-between mb-4">
-          <h3 className="font-semibold flex items-center gap-2"><BarChart3 className="w-4 h-4" /> Stats for Nerds</h3>
-          <button onClick={onClose} className="p-1 hover:bg-gray-100 rounded"><X className="w-4 h-4" /></button>
+          <h3 className="font-semibold text-lg flex items-center gap-2"><BarChart3 className="w-5 h-5" /> Stats for Nerds</h3>
+          <button onClick={onClose} className="p-1.5 hover:bg-gray-100 rounded"><X className="w-5 h-5" /></button>
         </div>
         
-        <div className="space-y-4 text-xs">
-          {/* Overview */}
+        {topic && (
+          <div className="bg-blue-50 rounded-lg p-3 mb-4">
+            <div className="text-xs font-medium text-blue-600 mb-1">Topic</div>
+            <div className="text-sm text-gray-800">{topic}</div>
+          </div>
+        )}
+        
+        <div className="space-y-4 text-sm">
           <div className="bg-gray-50 rounded-lg p-3">
             <div className="font-medium text-gray-700 mb-2">Overview</div>
             <div className="grid grid-cols-2 gap-2 text-gray-600">
-              <div>Total Messages: <span className="font-medium text-gray-900">{stats.totalMessages}</span></div>
+              <div>Messages: <span className="font-medium text-gray-900">{stats.totalMessages}</span></div>
               <div>Sessions: <span className="font-medium text-gray-900">{stats.sessions.length}</span></div>
-              <div>Total Time: <span className="font-medium text-gray-900">{formatDuration(stats.totalDuration)}</span></div>
-              <div className="flex items-center gap-1">Device: {stats.deviceType === 'desktop' ? <Monitor className="w-3 h-3" /> : <Smartphone className="w-3 h-3" />}<span className="font-medium text-gray-900">{stats.deviceType}</span></div>
+              <div>Duration: <span className="font-medium text-gray-900">{formatDuration(stats.totalDuration)}</span></div>
+              <div className="flex items-center gap-1">Device: {stats.deviceType === 'desktop' ? <Monitor className="w-4 h-4" /> : <Smartphone className="w-4 h-4" />}<span className="font-medium text-gray-900 capitalize">{stats.deviceType}</span></div>
             </div>
           </div>
           
-          {/* Cost Breakdown */}
           <div className="bg-green-50 rounded-lg p-3">
-            <div className="font-medium text-green-700 mb-2">Cost Breakdown</div>
+            <div className="font-medium text-green-700 mb-2">Estimated Cost</div>
             <div className="space-y-1 text-gray-600">
               <div className="flex justify-between">
-                <span>Total Cost:</span>
-                <span className="font-bold text-green-700">{formatCost(stats.totalCost)}</span>
+                <span>Total:</span>
+                <span className="font-bold text-green-700">{stats.totalCost < 0.01 ? 'Near zero' : `$${stats.totalCost.toFixed(3)}`}</span>
               </div>
-              <div className="flex justify-between text-[10px]">
-                <span className="text-orange-600">Claude:</span>
-                <span>{formatCost(stats.claudeCost)} ({stats.claudeTokensIn.toLocaleString()}↓ {stats.claudeTokensOut.toLocaleString()}↑)</span>
+              <div className="flex justify-between text-xs">
+                <span className="flex items-center gap-1"><ClaudeLogo className="w-3 h-3" /> Claude:</span>
+                <span>{stats.claudeCost < 0.001 ? '~$0' : `$${stats.claudeCost.toFixed(4)}`}</span>
               </div>
-              <div className="flex justify-between text-[10px]">
-                <span className="text-blue-600">Gemini:</span>
-                <span>{formatCost(stats.geminiCost)} ({stats.geminiTokensIn.toLocaleString()}↓ {stats.geminiTokensOut.toLocaleString()}↑)</span>
+              <div className="flex justify-between text-xs">
+                <span className="flex items-center gap-1"><GeminiLogo className="w-3 h-3" /> Gemini:</span>
+                <span>{stats.geminiCost < 0.001 ? '~$0' : `$${stats.geminiCost.toFixed(4)}`}</span>
               </div>
             </div>
           </div>
           
-          {/* Message Distribution */}
           <div className="bg-gray-50 rounded-lg p-3">
             <div className="font-medium text-gray-700 mb-2">Messages</div>
             <div className="flex gap-2">
               <div className="flex-1 bg-gray-200 rounded p-2 text-center">
-                <div className="text-lg font-bold">{stats.userMessages}</div>
-                <div className="text-[10px] text-gray-500">You</div>
+                <div className="text-xl font-bold">{stats.userMessages}</div>
+                <div className="text-xs text-gray-500">You</div>
               </div>
               <div className="flex-1 bg-orange-100 rounded p-2 text-center">
-                <div className="text-lg font-bold text-orange-600">{stats.claudeMessages}</div>
-                <div className="text-[10px] text-orange-500">Claude</div>
+                <div className="text-xl font-bold text-orange-600">{stats.claudeMessages}</div>
+                <div className="text-xs text-orange-500">Claude</div>
               </div>
               <div className="flex-1 bg-blue-100 rounded p-2 text-center">
-                <div className="text-lg font-bold text-blue-600">{stats.geminiMessages}</div>
-                <div className="text-[10px] text-blue-500">Gemini</div>
+                <div className="text-xl font-bold text-blue-600">{stats.geminiMessages}</div>
+                <div className="text-xs text-blue-500">Gemini</div>
               </div>
             </div>
           </div>
           
-          {/* Models Used */}
           {stats.modelsUsed.length > 0 && (
             <div className="bg-purple-50 rounded-lg p-3">
               <div className="font-medium text-purple-700 mb-2">Models Used</div>
-              <div className="flex flex-wrap gap-1">
+              <div className="flex flex-wrap gap-1.5">
                 {stats.modelsUsed.map((model, i) => (
-                  <span key={i} className="px-2 py-0.5 bg-purple-100 text-purple-700 rounded text-[10px]">{model}</span>
-                ))}
-              </div>
-            </div>
-          )}
-          
-          {/* Sessions */}
-          {stats.sessions.length > 0 && (
-            <div className="bg-gray-50 rounded-lg p-3">
-              <div className="font-medium text-gray-700 mb-2">Session History</div>
-              <div className="space-y-1 text-[10px]">
-                {stats.sessions.map((session, i) => (
-                  <div key={session.id} className="flex justify-between text-gray-600 py-1 border-b border-gray-100 last:border-0">
-                    <span>Session {i + 1}</span>
-                    <span>{session.messageCount} msgs • {formatCost(session.totalCost)}</span>
-                  </div>
+                  <span key={i} className="px-2 py-1 bg-purple-100 text-purple-700 rounded text-xs">{model}</span>
                 ))}
               </div>
             </div>
@@ -326,8 +310,8 @@ function StatsModal({ stats, onClose }: { stats: ConversationStats; onClose: () 
   )
 }
 
-const STORAGE_KEY = 'lounge-data-v6'
-const SCRIBE_MODEL = 'Gemini 3 Flash'
+const STORAGE_KEY = 'lounge-data-v7'
+const SCRIBE_MODEL = 'Gemini 2.0 Flash'
 
 export default function LoungePage() {
   const { user, isLoaded } = useUser()
@@ -369,7 +353,7 @@ export default function LoungePage() {
 
   useEffect(() => { messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [messages, currentThinking])
 
-  // Load data
+  // Load
   useEffect(() => {
     if (!user?.id) return
     const saved = localStorage.getItem(`${STORAGE_KEY}-${user.id}`)
@@ -377,9 +361,7 @@ export default function LoungePage() {
       try {
         const data = JSON.parse(saved)
         const convs = data.conversations?.map((c: any) => ({
-          ...c,
-          createdAt: new Date(c.createdAt),
-          endedAt: c.endedAt ? new Date(c.endedAt) : undefined,
+          ...c, createdAt: new Date(c.createdAt),
           messages: c.messages.map((m: any) => ({ ...m, timestamp: new Date(m.timestamp) })),
           scribeNotes: (c.scribeNotes || []).map((n: any) => ({ ...n, timestamp: new Date(n.timestamp) })),
           sessions: (c.sessions || []).map((s: any) => ({ ...s, startedAt: new Date(s.startedAt), endedAt: s.endedAt ? new Date(s.endedAt) : undefined }))
@@ -387,24 +369,19 @@ export default function LoungePage() {
         setConversations(convs)
         if (data.activeConversationId) {
           const active = convs.find((c: Conversation) => c.id === data.activeConversationId)
-          if (active) {
-            setActiveConversationId(active.id)
-            setMessages(active.messages)
-            setScribeNotes(active.scribeNotes || [])
-            setIsConversationEnded(active.isEnded || false)
-          }
+          if (active) { setActiveConversationId(active.id); setMessages(active.messages); setScribeNotes(active.scribeNotes || []); setIsConversationEnded(active.isEnded || false) }
         }
       } catch (e) { console.error('Load error:', e) }
     }
   }, [user?.id])
 
-  // Save data
+  // Save
   useEffect(() => {
     if (!user?.id || conversations.length === 0) return
     localStorage.setItem(`${STORAGE_KEY}-${user.id}`, JSON.stringify({ conversations, activeConversationId }))
   }, [conversations, activeConversationId, user?.id])
 
-  // Sync to active conversation
+  // Sync
   useEffect(() => {
     if (!activeConversationId) return
     setConversations(prev => prev.map(c => c.id === activeConversationId ? { ...c, messages, scribeNotes, isEnded: isConversationEnded } : c))
@@ -415,14 +392,9 @@ export default function LoungePage() {
     const geminiMsgs = messages.filter(m => m.role === 'gemini')
     const userMsgs = messages.filter(m => m.role === 'user')
     const modelsUsed = [...new Set([...claudeMsgs.map(m => m.model), ...geminiMsgs.map(m => m.model)].filter(Boolean))] as string[]
-    const firstMsg = messages[0]?.timestamp
-    const lastMsg = messages[messages.length - 1]?.timestamp
     const currentConv = conversations.find(c => c.id === activeConversationId)
     const sessions = currentConv?.sessions || []
-    const totalDuration = sessions.reduce((sum, s) => {
-      const end = s.endedAt || new Date()
-      return sum + Math.round((end.getTime() - s.startedAt.getTime()) / 60000)
-    }, 0)
+    const totalDuration = sessions.reduce((sum, s) => sum + Math.round(((s.endedAt || new Date()).getTime() - s.startedAt.getTime()) / 60000), 0)
     
     return {
       totalMessages: messages.length,
@@ -440,8 +412,7 @@ export default function LoungePage() {
       sessions,
       modelsUsed,
       deviceType: getDeviceType(),
-      firstMessageAt: firstMsg,
-      lastMessageAt: lastMsg
+      topic: currentConv?.title
     }
   }, [messages, conversations, activeConversationId])
 
@@ -465,29 +436,17 @@ export default function LoungePage() {
 
   const endCurrentSession = useCallback(() => {
     if (!currentSessionId || !sessionStartTime) return
-    
-    const claudeMsgs = messages.filter(m => m.role === 'claude')
-    const geminiMsgs = messages.filter(m => m.role === 'gemini')
-    
     const session: Session = {
-      id: currentSessionId,
-      startedAt: sessionStartTime,
-      endedAt: new Date(),
+      id: currentSessionId, startedAt: sessionStartTime, endedAt: new Date(),
       messageCount: messages.length,
-      claudeCost: claudeMsgs.reduce((sum, m) => sum + (m.cost || 0), 0),
-      geminiCost: geminiMsgs.reduce((sum, m) => sum + (m.cost || 0), 0),
+      claudeCost: messages.filter(m => m.role === 'claude').reduce((sum, m) => sum + (m.cost || 0), 0),
+      geminiCost: messages.filter(m => m.role === 'gemini').reduce((sum, m) => sum + (m.cost || 0), 0),
       totalCost: messages.reduce((sum, m) => sum + (m.cost || 0), 0)
     }
-    
-    setConversations(prev => prev.map(c => 
-      c.id === activeConversationId 
-        ? { ...c, sessions: [...(c.sessions || []), session], stats: calculateStats() }
-        : c
-    ))
-    
+    setConversations(prev => prev.map(c => c.id === activeConversationId ? { ...c, sessions: [...(c.sessions || []), session] } : c))
     setCurrentSessionId(null)
     setSessionStartTime(null)
-  }, [currentSessionId, sessionStartTime, messages, activeConversationId, calculateStats])
+  }, [currentSessionId, sessionStartTime, messages, activeConversationId])
 
   const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files
@@ -504,37 +463,27 @@ export default function LoungePage() {
     e.target.value = ''
   }
 
-  const removeAttachment = (id: string) => setAttachments(prev => prev.filter(a => a.id !== id))
-
   const endConversation = () => {
     endCurrentSession()
     setIsConversationEnded(true)
-    setConversations(prev => prev.map(c => 
-      c.id === activeConversationId ? { ...c, isEnded: true, endedAt: new Date(), stats: calculateStats() } : c
-    ))
+    setConversations(prev => prev.map(c => c.id === activeConversationId ? { ...c, isEnded: true, stats: calculateStats() } : c))
   }
 
   const startNewConversation = (resumeFromScribe?: string) => {
-    if (activeConversationId && messages.length > 0 && !isConversationEnded) {
-      endConversation()
-    }
-    
-    const newSessionId = crypto.randomUUID()
+    if (activeConversationId && messages.length > 0 && !isConversationEnded) endConversation()
     const newConv: Conversation = { 
       id: crypto.randomUUID(), 
       title: resumeFromScribe ? 'Resumed conversation' : 'New conversation', 
       messages: [], 
-      scribeNotes: resumeFromScribe ? [{ timestamp: new Date(), content: `**Resumed from previous conversation:**\n${resumeFromScribe}` }] : [], 
-      sessions: [],
-      isEnded: false,
-      createdAt: new Date() 
+      scribeNotes: resumeFromScribe ? [{ timestamp: new Date(), content: `**Resumed:**\n${resumeFromScribe}` }] : [], 
+      sessions: [], isEnded: false, createdAt: new Date() 
     }
     setConversations(prev => [newConv, ...prev])
     setActiveConversationId(newConv.id)
     setMessages([])
-    setScribeNotes(resumeFromScribe ? [{ timestamp: new Date(), content: `**Resumed from previous conversation:**\n${resumeFromScribe}` }] : [])
+    setScribeNotes(resumeFromScribe ? [{ timestamp: new Date(), content: `**Resumed:**\n${resumeFromScribe}` }] : [])
     setIsConversationEnded(false)
-    setCurrentSessionId(newSessionId)
+    setCurrentSessionId(crypto.randomUUID())
     setSessionStartTime(new Date())
     setAgents({
       claude: { name: 'Claude', settings: { ...defaultSettings }, tokensIn: 0, tokensOut: 0, cost: 0, isRefreshed: !!resumeFromScribe, refreshCount: 0 },
@@ -543,88 +492,53 @@ export default function LoungePage() {
   }
 
   const resumeConversation = () => {
-    const allNotes = scribeNotes.map(n => n.content).join('\n\n')
-    const newSessionId = crypto.randomUUID()
-    
     setIsConversationEnded(false)
-    setCurrentSessionId(newSessionId)
+    setCurrentSessionId(crypto.randomUUID())
     setSessionStartTime(new Date())
     setAgents({
-      claude: { name: 'Claude', settings: { ...defaultSettings }, tokensIn: 0, tokensOut: 0, cost: 0, isRefreshed: true, refreshCount: agents.claude.refreshCount + 1 },
-      gemini: { name: 'Gemini', settings: { ...defaultSettings }, tokensIn: 0, tokensOut: 0, cost: 0, isRefreshed: true, refreshCount: agents.gemini.refreshCount + 1 }
+      claude: { ...agents.claude, tokensIn: 0, tokensOut: 0, cost: 0, isRefreshed: true, refreshCount: agents.claude.refreshCount + 1 },
+      gemini: { ...agents.gemini, tokensIn: 0, tokensOut: 0, cost: 0, isRefreshed: true, refreshCount: agents.gemini.refreshCount + 1 }
     })
-    
-    // Add system message
     addMessage('system', '🔄 Fresh agents have joined and read the scribe notes.')
   }
 
   const loadConversation = (conv: Conversation) => {
-    if (activeConversationId && messages.length > 0 && !isConversationEnded) {
-      endConversation()
-    }
+    if (activeConversationId && messages.length > 0 && !isConversationEnded) endConversation()
     setActiveConversationId(conv.id)
     setMessages(conv.messages)
     setScribeNotes(conv.scribeNotes || [])
     setIsConversationEnded(conv.isEnded || false)
-    if (!conv.isEnded) {
-      setCurrentSessionId(crypto.randomUUID())
-      setSessionStartTime(new Date())
-    }
-  }
-
-  const copyScribeNotes = () => {
-    navigator.clipboard.writeText(scribeNotes.map(n => n.content).join('\n\n---\n\n'))
-    setScribeCopied(true)
-    setTimeout(() => setScribeCopied(false), 2000)
+    if (!conv.isEnded) { setCurrentSessionId(crypto.randomUUID()); setSessionStartTime(new Date()) }
   }
 
   const shareConversation = async () => {
-    const shareData = {
-      title: conversations.find(c => c.id === activeConversationId)?.title || 'Lounge Conversation',
-      messages: messages.filter(m => m.role !== 'system').map(m => ({
-        role: m.role,
-        content: m.content,
-        model: m.model,
-        timestamp: m.timestamp
-      }))
-    }
-    
-    // Create shareable URL (would need backend support for persistence)
     const shareText = messages.filter(m => m.role !== 'system').map(m => 
-      `${m.role === 'user' ? 'You' : m.role === 'claude' ? 'Claude' : 'Gemini'}: ${m.content}`
-    ).join('\n\n')
+      `${m.role === 'user' ? 'You' : m.role === 'claude' ? `Claude (${m.model})` : `Gemini (${m.model})`}: ${m.content}`
+    ).join('\n\n---\n\n')
     
     if (navigator.share) {
-      try {
-        await navigator.share({ title: shareData.title, text: shareText })
-      } catch (e) { console.log('Share cancelled') }
+      try { await navigator.share({ title: conversations.find(c => c.id === activeConversationId)?.title, text: shareText }) } catch {}
     } else {
       navigator.clipboard.writeText(shareText)
-      alert('Conversation copied to clipboard!')
+      alert('Copied to clipboard!')
     }
-  }
-
-  const copyMessage = (content: string, id: string) => {
-    navigator.clipboard.writeText(content)
-    setCopiedId(id)
-    setTimeout(() => setCopiedId(null), 2000)
   }
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     if ((!input.trim() && attachments.length === 0) || isProcessing || isConversationEnded) return
-    
-    // Start session if needed
-    if (!currentSessionId) {
-      setCurrentSessionId(crypto.randomUUID())
-      setSessionStartTime(new Date())
-    }
-    
+    if (!currentSessionId) { setCurrentSessionId(crypto.randomUUID()); setSessionStartTime(new Date()) }
     if (!activeConversationId) {
-      const title = input.trim().slice(0, 40) || 'Image conversation'
-      const newConv: Conversation = { id: crypto.randomUUID(), title: title + (input.length > 40 ? '...' : ''), messages: [], scribeNotes: [], sessions: [], isEnded: false, createdAt: new Date() }
+      const title = input.trim().slice(0, 50) || 'New chat'
+      const newConv: Conversation = { id: crypto.randomUUID(), title, messages: [], scribeNotes: [], sessions: [], isEnded: false, createdAt: new Date() }
       setConversations(prev => [newConv, ...prev])
       setActiveConversationId(newConv.id)
+    } else {
+      // Update title if first message
+      if (messages.length === 0) {
+        const title = input.trim().slice(0, 50)
+        setConversations(prev => prev.map(c => c.id === activeConversationId ? { ...c, title } : c))
+      }
     }
     await sendMessage(input.trim())
   }
@@ -636,7 +550,7 @@ export default function LoungePage() {
   const handlePoke = async (agentId: string) => {
     if (isProcessing || isConversationEnded) return
     setAgentPriority(agentId === 'claude' ? -2 : 2)
-    await sendMessage('Please elaborate on your last point.', true)
+    await sendMessage('Please elaborate.', true)
   }
 
   const handleHush = () => {
@@ -653,17 +567,12 @@ export default function LoungePage() {
     setIsProcessing(true)
     
     let fullContent = messageText
-    if (currentAttachments.length > 0) {
-      fullContent = `${currentAttachments.map(a => a.type === 'image' ? `[Image: ${a.name}]` : `[File: ${a.name}]`).join(' ')} ${messageText}`.trim()
-    }
-    
+    if (currentAttachments.length > 0) fullContent = `${currentAttachments.map(a => `[${a.type === 'image' ? 'Image' : 'File'}: ${a.name}]`).join(' ')} ${messageText}`.trim()
     if (!isPoke) addMessage('user', fullContent, undefined, undefined, undefined, undefined, undefined, undefined, currentAttachments)
 
     abortControllerRef.current = new AbortController()
 
     try {
-      const scribeContext = scribeNotes.map(n => n.content).join('\n\n')
-      
       const response = await fetch('/api/lounge/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -671,9 +580,8 @@ export default function LoungePage() {
           messages: [...messages, { role: 'user', content: fullContent }],
           agents: { claude: agents.claude.settings, gemini: agents.gemini.settings },
           bias: agentPriority,
-          scribeContext,
-          refreshedAgents: { claude: agents.claude.isRefreshed, gemini: agents.gemini.isRefreshed },
-          attachments: currentAttachments.map(a => ({ type: a.type, name: a.name, base64: a.base64 }))
+          scribeContext: scribeNotes.map(n => n.content).join('\n\n'),
+          refreshedAgents: { claude: agents.claude.isRefreshed, gemini: agents.gemini.isRefreshed }
         }),
         signal: abortControllerRef.current.signal
       })
@@ -686,7 +594,6 @@ export default function LoungePage() {
       while (true) {
         const { done, value } = await reader.read()
         if (done) break
-
         for (const line of decoder.decode(value).split('\n').filter(l => l.startsWith('data: '))) {
           try {
             const data = JSON.parse(line.slice(6))
@@ -708,7 +615,7 @@ export default function LoungePage() {
       }
       if (isPoke) setAgentPriority(0)
     } catch (error) {
-      if ((error as Error).name !== 'AbortError') addMessage('claude', 'Sorry, something went wrong.')
+      if ((error as Error).name !== 'AbortError') addMessage('system', 'Something went wrong. Please try again.')
     } finally {
       setIsProcessing(false)
       setCurrentThinking(null)
@@ -716,99 +623,94 @@ export default function LoungePage() {
     }
   }
 
-  if (!isLoaded) return <div className="min-h-screen flex items-center justify-center bg-gray-50 text-sm">Loading...</div>
+  if (!isLoaded) return <div className="min-h-screen flex items-center justify-center bg-gray-50">Loading...</div>
 
   const currentStats = calculateStats()
 
   return (
-    <main className="flex flex-col h-screen bg-gray-50 text-[13px]">
-      {showStats && <StatsModal stats={currentStats} onClose={() => setShowStats(false)} />}
+    <main className="flex flex-col h-screen bg-gray-50">
+      {showStats && <StatsModal stats={currentStats} topic={conversations.find(c => c.id === activeConversationId)?.title || ''} onClose={() => setShowStats(false)} />}
       
       {/* Header */}
-      <header className="flex items-center justify-between px-4 py-2 border-b border-gray-200 bg-white">
-        <div className="flex items-center gap-2">
+      <header className="flex items-center justify-between px-4 py-2.5 border-b border-gray-200 bg-white">
+        <div className="flex items-center gap-3">
           <button onClick={() => setSidebarCollapsed(!sidebarCollapsed)} className="p-1.5 hover:bg-gray-100 rounded">
-            {sidebarCollapsed ? <PanelLeft className="w-4 h-4" /> : <PanelLeftClose className="w-4 h-4" />}
+            {sidebarCollapsed ? <PanelLeft className="w-5 h-5" /> : <PanelLeftClose className="w-5 h-5" />}
           </button>
-          <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-orange-400 via-purple-500 to-blue-500 flex items-center justify-center">
-            <MessageSquare className="w-3.5 h-3.5 text-white" />
+          <div className="flex items-center gap-2">
+            <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-orange-400 via-purple-500 to-blue-500 flex items-center justify-center">
+              <MessageSquare className="w-4 h-4 text-white" />
+            </div>
+            <span className="font-semibold text-gray-800">Lounge</span>
           </div>
-          <span className="font-semibold text-gray-800">Lounge</span>
         </div>
-        <div className="flex items-center gap-2 text-xs text-gray-500">
+        <div className="flex items-center gap-2">
           {messages.length > 0 && (
             <>
-              <button onClick={shareConversation} className="p-1.5 hover:bg-gray-100 rounded" title="Share"><Share2 className="w-3.5 h-3.5" /></button>
-              <button onClick={() => setShowStats(true)} className="p-1.5 hover:bg-gray-100 rounded" title="Stats"><BarChart3 className="w-3.5 h-3.5" /></button>
+              <button onClick={shareConversation} className="p-2 hover:bg-gray-100 rounded" title="Share"><Share2 className="w-4 h-4 text-gray-500" /></button>
+              <button onClick={() => setShowStats(true)} className="p-2 hover:bg-gray-100 rounded" title="Stats"><BarChart3 className="w-4 h-4 text-gray-500" /></button>
             </>
           )}
-          <span>{user?.firstName || 'User'}</span>
-          <button onClick={() => router.push('/settings')} className="p-1.5 hover:bg-gray-100 rounded"><Settings className="w-3.5 h-3.5" /></button>
-          <SignOutButton><button className="p-1.5 hover:bg-gray-100 rounded"><LogOut className="w-3.5 h-3.5" /></button></SignOutButton>
+          <span className="text-sm text-gray-500">{user?.firstName}</span>
+          <button onClick={() => router.push('/settings')} className="p-2 hover:bg-gray-100 rounded"><Settings className="w-4 h-4 text-gray-500" /></button>
+          <SignOutButton><button className="p-2 hover:bg-gray-100 rounded"><LogOut className="w-4 h-4 text-gray-500" /></button></SignOutButton>
         </div>
       </header>
 
       <div className="flex flex-1 overflow-hidden">
-        {/* Left - History (collapsible) */}
-        <div className={`${sidebarCollapsed ? 'w-0' : 'w-48'} transition-all duration-200 border-r border-gray-200 bg-white flex flex-col overflow-hidden`}>
-          <div className="p-2">
-            <button onClick={() => startNewConversation()} className="w-full flex items-center gap-1.5 px-2.5 py-1.5 text-xs bg-gray-100 hover:bg-gray-200 rounded-lg">
-              <Plus className="w-3 h-3" /> New chat
+        {/* Sidebar */}
+        <div className={`${sidebarCollapsed ? 'w-0' : 'w-56'} transition-all duration-200 border-r border-gray-200 bg-white flex flex-col overflow-hidden`}>
+          <div className="p-3">
+            <button onClick={() => startNewConversation()} className="w-full flex items-center gap-2 px-3 py-2 text-sm bg-gray-100 hover:bg-gray-200 rounded-lg">
+              <Plus className="w-4 h-4" /> New chat
             </button>
           </div>
           <div className="flex-1 overflow-y-auto">
             {conversations.map(conv => (
               <button key={conv.id} onClick={() => loadConversation(conv)}
-                className={`w-full text-left px-3 py-2 text-xs hover:bg-gray-50 border-b border-gray-50 ${activeConversationId === conv.id ? 'bg-blue-50 border-l-2 border-l-blue-500' : ''}`}>
+                className={`w-full text-left px-4 py-3 text-sm hover:bg-gray-50 border-b border-gray-50 ${activeConversationId === conv.id ? 'bg-blue-50 border-l-2 border-l-blue-500' : ''}`}>
                 <div className="font-medium text-gray-700 truncate">{conv.title}</div>
-                <div className="text-[10px] text-gray-400 flex items-center gap-1">
-                  {conv.messages.length} msgs
-                  {conv.stats && <span className="text-green-600">• {formatCost(conv.stats.totalCost)}</span>}
-                  {conv.isEnded && <span className="text-gray-400">• ended</span>}
-                </div>
+                <div className="text-xs text-gray-400 mt-0.5">{conv.messages.length} messages {conv.isEnded && '• ended'}</div>
               </button>
             ))}
           </div>
         </div>
 
-        {/* Center - Chat */}
+        {/* Chat */}
         <div className="flex-1 flex flex-col min-w-0">
-          <div className="flex-1 overflow-y-auto px-4 py-3 space-y-2.5">
+          <div className="flex-1 overflow-y-auto px-4 py-4 space-y-3">
             {messages.length === 0 ? (
               <div className="flex flex-col items-center justify-center h-full text-gray-400">
-                <MessageSquare className="w-8 h-8 mb-2 opacity-40" />
-                <p className="text-sm">Start a conversation</p>
+                <MessageSquare className="w-10 h-10 mb-3 opacity-40" />
+                <p className="text-base">Start a conversation</p>
               </div>
             ) : (
               <>
                 {messages.map((msg) => (
                   <div key={msg.id} className={`flex ${msg.role === 'user' ? 'justify-end' : msg.role === 'system' ? 'justify-center' : 'justify-start'}`}>
                     {msg.role === 'system' ? (
-                      <div className="text-[10px] text-gray-400 bg-gray-100 px-3 py-1 rounded-full">{msg.content}</div>
+                      <div className="text-sm text-gray-400 bg-gray-100 px-4 py-1.5 rounded-full">{msg.content}</div>
                     ) : (
-                      <div className={`max-w-[80%] rounded-xl px-3 py-2 ${msg.role === 'user' ? 'bg-gray-800 text-white' : msg.role === 'claude' ? 'bg-orange-50 border border-orange-100' : 'bg-blue-50 border border-blue-100'}`}>
+                      <div className={`max-w-[80%] rounded-2xl px-4 py-3 ${msg.role === 'user' ? 'bg-gray-800 text-white' : msg.role === 'claude' ? 'bg-orange-50 border border-orange-100' : 'bg-blue-50 border border-blue-100'}`}>
                         {msg.role !== 'user' && (
-                          <div className={`text-[10px] font-medium mb-1 flex items-center gap-1.5 ${msg.role === 'claude' ? 'text-orange-600' : 'text-blue-600'}`}>
-                            {msg.role === 'claude' ? <ClaudeLogo className="w-3.5 h-3.5" /> : <GeminiLogo className="w-3.5 h-3.5" />}
+                          <div className={`text-xs font-medium mb-2 flex items-center gap-2 ${msg.role === 'claude' ? 'text-orange-600' : 'text-blue-600'}`}>
+                            {msg.role === 'claude' ? <ClaudeLogo className="w-4 h-4" /> : <GeminiLogo className="w-4 h-4" />}
                             {msg.role === 'claude' ? 'Claude' : 'Gemini'}
                             {msg.model && <span className="text-gray-400 font-normal">({msg.model})</span>}
-                            <span className="text-gray-400 font-normal flex items-center gap-0.5 ml-auto"><Clock className="w-2.5 h-2.5" />{formatTime(msg.timestamp)}</span>
+                            <span className="text-gray-400 font-normal flex items-center gap-1 ml-auto"><Clock className="w-3 h-3" />{formatTime(msg.timestamp)}</span>
                           </div>
                         )}
-                        {msg.attachments && msg.attachments.length > 0 && (
-                          <div className="flex gap-1 mb-2 flex-wrap">
-                            {msg.attachments.map(att => (
-                              <div key={att.id}>{att.type === 'image' ? <img src={att.url} alt={att.name} className="max-w-[200px] max-h-[150px] rounded-lg" /> : <div className="flex items-center gap-1 bg-gray-100 px-2 py-1 rounded text-[10px]"><FileText className="w-3 h-3" />{att.name}</div>}</div>
-                            ))}
-                          </div>
-                        )}
-                        <div className="text-xs leading-relaxed"><FormattedText content={msg.content} /></div>
+                        {msg.attachments?.map(att => (
+                          <div key={att.id} className="mb-2">{att.type === 'image' ? <img src={att.url} alt={att.name} className="max-w-[250px] rounded-lg" /> : <div className="flex items-center gap-2 bg-gray-100 px-3 py-2 rounded text-sm"><FileText className="w-4 h-4" />{att.name}</div>}</div>
+                        ))}
+                        <div className="text-sm leading-relaxed"><FormattedText content={msg.content} /></div>
                         {msg.role !== 'user' && (
-                          <div className="flex items-center gap-0.5 mt-1.5 pt-1.5 border-t border-black/5">
-                            <button onClick={() => copyMessage(msg.content, msg.id)} className="p-1 hover:bg-black/5 rounded text-gray-400 hover:text-gray-600">{copiedId === msg.id ? <Check className="w-3 h-3 text-green-500" /> : <Copy className="w-3 h-3" />}</button>
-                            <button onClick={() => setMessageFeedback(msg.id, 'up', msg.role)} className={`p-1 hover:bg-black/5 rounded ${msg.feedback === 'up' ? 'text-green-500' : 'text-gray-400 hover:text-green-600'}`}><ThumbsUp className="w-3 h-3" /></button>
-                            <button onClick={() => setMessageFeedback(msg.id, 'down', msg.role)} className={`p-1 hover:bg-black/5 rounded ${msg.feedback === 'down' ? 'text-red-500' : 'text-gray-400 hover:text-red-600'}`}><ThumbsDown className="w-3 h-3" /></button>
-                            {msg.cost !== undefined && msg.cost > 0 && <span className="text-[8px] text-gray-400 ml-auto flex items-center gap-0.5"><DollarSign className="w-2.5 h-2.5" />{formatCost(msg.cost)}</span>}
+                          <div className="flex items-center gap-1 mt-2 pt-2 border-t border-black/5">
+                            <button onClick={() => { navigator.clipboard.writeText(msg.content); setCopiedId(msg.id); setTimeout(() => setCopiedId(null), 2000) }} className="p-1.5 hover:bg-black/5 rounded text-gray-400 hover:text-gray-600">
+                              {copiedId === msg.id ? <Check className="w-4 h-4 text-green-500" /> : <Copy className="w-4 h-4" />}
+                            </button>
+                            <button onClick={() => setMessageFeedback(msg.id, 'up', msg.role)} className={`p-1.5 hover:bg-black/5 rounded ${msg.feedback === 'up' ? 'text-green-500' : 'text-gray-400'}`}><ThumbsUp className="w-4 h-4" /></button>
+                            <button onClick={() => setMessageFeedback(msg.id, 'down', msg.role)} className={`p-1.5 hover:bg-black/5 rounded ${msg.feedback === 'down' ? 'text-red-500' : 'text-gray-400'}`}><ThumbsDown className="w-4 h-4" /></button>
                           </div>
                         )}
                       </div>
@@ -816,18 +718,19 @@ export default function LoungePage() {
                   </div>
                 ))}
                 
-                {/* End of conversation stats */}
-                {isConversationEnded && messages.length > 0 && (
-                  <div className="bg-gray-100 rounded-xl p-4 text-center space-y-2">
-                    <div className="text-sm font-medium text-gray-700">Conversation Ended</div>
-                    <div className="text-[10px] text-gray-500 space-y-1">
-                      <div>{currentStats.totalMessages} messages • {formatDuration(currentStats.totalDuration)} • {currentStats.sessions.length} session(s)</div>
-                      <div className="text-green-600 font-medium">{formatCost(currentStats.totalCost)} total (Claude: {formatCost(currentStats.claudeCost)}, Gemini: {formatCost(currentStats.geminiCost)})</div>
-                      <div className="text-gray-400">Models: {currentStats.modelsUsed.join(', ') || 'None'}</div>
-                      <div className="flex items-center justify-center gap-1">{currentStats.deviceType === 'desktop' ? <Monitor className="w-3 h-3" /> : <Smartphone className="w-3 h-3" />}{currentStats.deviceType}</div>
+                {isConversationEnded && (
+                  <div className="bg-gray-100 rounded-2xl p-5 text-center space-y-3">
+                    <div className="text-base font-medium text-gray-700">Conversation Ended</div>
+                    <div className="text-sm text-gray-500">
+                      <div className="font-medium">{conversations.find(c => c.id === activeConversationId)?.title}</div>
+                      <div className="mt-2">{currentStats.totalMessages} messages • {formatDuration(currentStats.totalDuration)} • {currentStats.sessions.length} session(s)</div>
+                      <div className="mt-1 text-green-600">Estimated cost: {currentStats.totalCost < 0.01 ? 'near zero' : `$${currentStats.totalCost.toFixed(3)}`}</div>
+                      <div className="text-xs text-gray-400 mt-1">(Claude: {currentStats.claudeCost < 0.01 ? '~$0' : `$${currentStats.claudeCost.toFixed(3)}`}, Gemini: {currentStats.geminiCost < 0.01 ? '~$0' : `$${currentStats.geminiCost.toFixed(3)}`})</div>
+                      {currentStats.modelsUsed.length > 0 && <div className="text-xs text-gray-400 mt-1">Models: {currentStats.modelsUsed.join(', ')}</div>}
+                      <div className="flex items-center justify-center gap-1 text-xs text-gray-400 mt-1">{currentStats.deviceType === 'desktop' ? <Monitor className="w-3 h-3" /> : <Smartphone className="w-3 h-3" />}{currentStats.deviceType}</div>
                     </div>
-                    <button onClick={resumeConversation} className="mt-2 px-3 py-1.5 bg-blue-500 text-white text-xs rounded-lg hover:bg-blue-600 flex items-center gap-1 mx-auto">
-                      <RotateCcw className="w-3 h-3" /> Resume with fresh agents
+                    <button onClick={resumeConversation} className="px-4 py-2 bg-blue-500 text-white text-sm rounded-lg hover:bg-blue-600 flex items-center gap-2 mx-auto">
+                      <RotateCcw className="w-4 h-4" /> Resume with fresh agents
                     </button>
                   </div>
                 )}
@@ -836,9 +739,9 @@ export default function LoungePage() {
             
             {currentThinking && (
               <div className="flex justify-start">
-                <div className={`rounded-xl px-3 py-2 text-xs ${currentThinking.agent === 'claude' ? 'bg-orange-50/50' : 'bg-blue-50/50'}`}>
+                <div className={`rounded-2xl px-4 py-3 text-sm ${currentThinking.agent === 'claude' ? 'bg-orange-50/50' : 'bg-blue-50/50'}`}>
                   <span className={`${currentThinking.agent === 'claude' ? 'text-orange-400' : 'text-blue-400'} animate-pulse`}>{currentThinking.agent === 'claude' ? 'Claude' : 'Gemini'} thinking...</span>
-                  <span className="text-gray-400 italic ml-1">"{currentThinking.text}"</span>
+                  <span className="text-gray-400 italic ml-2">"{currentThinking.text}"</span>
                 </div>
               </div>
             )}
@@ -850,68 +753,70 @@ export default function LoungePage() {
             <div className="px-4 py-2 border-t border-gray-100 flex gap-2 flex-wrap">
               {attachments.map(att => (
                 <div key={att.id} className="relative group">
-                  {att.type === 'image' ? <img src={att.url} alt={att.name} className="w-16 h-16 object-cover rounded-lg" /> : <div className="w-16 h-16 bg-gray-100 rounded-lg flex items-center justify-center"><FileText className="w-6 h-6 text-gray-400" /></div>}
-                  <button onClick={() => removeAttachment(att.id)} className="absolute -top-1 -right-1 w-4 h-4 bg-red-500 text-white rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100"><X className="w-3 h-3" /></button>
+                  {att.type === 'image' ? <img src={att.url} alt={att.name} className="w-20 h-20 object-cover rounded-lg" /> : <div className="w-20 h-20 bg-gray-100 rounded-lg flex items-center justify-center"><FileText className="w-8 h-8 text-gray-400" /></div>}
+                  <button onClick={() => setAttachments(prev => prev.filter(a => a.id !== att.id))} className="absolute -top-2 -right-2 w-5 h-5 bg-red-500 text-white rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100"><X className="w-3 h-3" /></button>
                 </div>
               ))}
             </div>
           )}
 
           {/* Input */}
-          <form onSubmit={handleSubmit} className="p-3 border-t border-gray-200 bg-white">
+          <form onSubmit={handleSubmit} className="p-4 border-t border-gray-200 bg-white">
             {isConversationEnded ? (
-              <div className="text-center text-xs text-gray-400 py-2">
+              <div className="text-center text-sm text-gray-400 py-2">
                 Conversation ended. <button onClick={resumeConversation} className="text-blue-500 hover:underline">Resume</button> or <button onClick={() => startNewConversation()} className="text-blue-500 hover:underline">start new</button>
               </div>
             ) : (
-              <div className="flex gap-2 items-end">
-                <input type="file" ref={fileInputRef} onChange={handleFileSelect} multiple accept="image/*,.pdf,.txt,.md,.csv" className="hidden" />
-                <button type="button" onClick={() => fileInputRef.current?.click()} className="px-2 py-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg flex-shrink-0"><Paperclip className="w-4 h-4" /></button>
-                <textarea value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={handleKeyDown} placeholder="Message... (Shift+Enter for new line)" className="flex-1 px-3 py-2 text-sm rounded-lg border border-gray-200 focus:outline-none focus:ring-1 focus:ring-blue-500 resize-none min-h-[40px] max-h-[120px]" rows={1} disabled={isProcessing}
+              <div className="flex gap-3 items-end">
+                <input type="file" ref={fileInputRef} onChange={handleFileSelect} multiple accept="image/*,.pdf,.txt,.md" className="hidden" />
+                <button type="button" onClick={() => fileInputRef.current?.click()} className="p-2.5 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg"><Paperclip className="w-5 h-5" /></button>
+                <textarea value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={handleKeyDown} placeholder="Type a message..." className="flex-1 px-4 py-2.5 text-sm rounded-xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none min-h-[44px] max-h-[120px]" rows={1} disabled={isProcessing}
                   onInput={(e) => { const t = e.target as HTMLTextAreaElement; t.style.height = 'auto'; t.style.height = Math.min(t.scrollHeight, 120) + 'px' }} />
-                {!isConversationEnded && messages.length > 0 && (
-                  <button type="button" onClick={endConversation} className="px-2 py-2 text-gray-400 hover:text-red-500 hover:bg-gray-100 rounded-lg flex-shrink-0" title="End conversation"><Square className="w-4 h-4" /></button>
+                {messages.length > 0 && !isProcessing && (
+                  <button type="button" onClick={endConversation} className="p-2.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg" title="End conversation">
+                    <PhoneOff className="w-5 h-5" />
+                  </button>
                 )}
                 {isProcessing ? (
-                  <button type="button" onClick={handleHush} className="px-3 py-2 bg-red-500 text-white rounded-lg flex-shrink-0"><Square className="w-4 h-4" /></button>
+                  <button type="button" onClick={handleHush} className="p-2.5 bg-red-500 text-white rounded-lg"><Square className="w-5 h-5" /></button>
                 ) : (
-                  <button type="submit" disabled={!input.trim() && attachments.length === 0} className="px-3 py-2 bg-blue-500 text-white rounded-lg disabled:opacity-40 flex-shrink-0"><Send className="w-4 h-4" /></button>
+                  <button type="submit" disabled={!input.trim() && attachments.length === 0} className="p-2.5 bg-blue-500 text-white rounded-lg disabled:opacity-40"><Send className="w-5 h-5" /></button>
                 )}
               </div>
             )}
           </form>
         </div>
 
-        {/* Right - Controls */}
-        <div className="w-52 border-l border-gray-200 bg-white flex flex-col text-xs overflow-y-auto">
+        {/* Controls */}
+        <div className="w-56 border-l border-gray-200 bg-white flex flex-col overflow-y-auto">
           <div className="p-3 border-b border-gray-100">
-            <div className="text-[9px] font-medium text-gray-400 uppercase tracking-wide mb-2">Agent Priority</div>
+            <div className="text-xs font-medium text-gray-400 uppercase tracking-wide mb-2">Agent Priority</div>
             <AgentPrioritySelector value={agentPriority} onChange={setAgentPriority} />
           </div>
 
-          <div className="flex-1 p-3 space-y-2.5 overflow-y-auto">
+          <div className="flex-1 p-3 space-y-3 overflow-y-auto">
             {Object.entries(agents).map(([id, agent]) => {
               const color = id === 'claude' ? 'orange' : 'blue' as const
               const energy = getEnergy(agent.tokensIn, agent.tokensOut, id as 'claude' | 'gemini')
               return (
-                <div key={id} className={`p-2 rounded-lg border ${activeAgent === id ? id === 'claude' ? 'bg-orange-50 border-orange-200' : 'bg-blue-50 border-blue-200' : 'bg-gray-50 border-gray-100'}`}>
-                  <div className="flex items-center justify-between mb-1.5">
-                    <div className="flex items-center gap-1.5">
-                      {id === 'claude' ? <ClaudeLogo className="w-4 h-4" /> : <GeminiLogo className="w-4 h-4" />}
-                      <span className={`font-medium text-[11px] ${id === 'claude' ? 'text-orange-700' : 'text-blue-700'}`}>{agent.name}</span>
+                <div key={id} className={`p-3 rounded-xl border ${activeAgent === id ? id === 'claude' ? 'bg-orange-50 border-orange-200' : 'bg-blue-50 border-blue-200' : 'bg-gray-50 border-gray-100'}`}>
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="flex items-center gap-2">
+                      {id === 'claude' ? <ClaudeLogo className="w-5 h-5" /> : <GeminiLogo className="w-5 h-5" />}
+                      <span className={`font-medium text-sm ${id === 'claude' ? 'text-orange-700' : 'text-blue-700'}`}>{agent.name}</span>
                     </div>
-                    <button onClick={() => handlePoke(id)} disabled={isProcessing || isConversationEnded} className="text-[8px] px-1.5 py-0.5 rounded bg-white border border-gray-200 hover:bg-gray-50 disabled:opacity-40">Poke</button>
+                    <button onClick={() => handlePoke(id)} disabled={isProcessing || isConversationEnded} className="text-xs px-2 py-1 rounded bg-white border border-gray-200 hover:bg-gray-50 disabled:opacity-40">Poke</button>
                   </div>
-                  <div className="mb-2">
-                    <div className="flex justify-between text-[8px] text-gray-500 mb-0.5"><span>Energy</span><span>{energy.toFixed(0)}%</span></div>
-                    <div className="h-1 bg-gray-200 rounded-full overflow-hidden"><div className={`h-full transition-all ${energy > 50 ? 'bg-green-500' : energy > 20 ? 'bg-yellow-500' : 'bg-red-500'}`} style={{ width: `${energy}%` }} /></div>
-                    <div className="text-[7px] text-gray-400 mt-0.5 flex justify-between"><span>{(agent.tokensIn + agent.tokensOut).toLocaleString()} tokens</span><span className="text-green-600">({formatCost(agent.cost)})</span></div>
+                  <div className="mb-3">
+                    <div className="flex justify-between text-xs text-gray-500 mb-1"><span>Energy</span><span>{energy.toFixed(0)}%</span></div>
+                    <div className="h-1.5 bg-gray-200 rounded-full overflow-hidden"><div className={`h-full transition-all ${energy > 50 ? 'bg-green-500' : energy > 20 ? 'bg-yellow-500' : 'bg-red-500'}`} style={{ width: `${energy}%` }} /></div>
+                    <div className="text-xs text-gray-400 mt-1">{(agent.tokensIn + agent.tokensOut).toLocaleString()} tokens</div>
                   </div>
-                  <div className="space-y-2">
-                    <div><div className="text-[8px] text-gray-500 mb-0.5">Speed</div><ThreePointSlider value={agent.settings.speed} onChange={(v) => updateAgentSetting(id, 'speed', v)} labels={['Deep', 'Medium', 'Fast']} color={color} /></div>
-                    <div><div className="text-[8px] text-gray-500 mb-0.5">Verbosity</div><ThreePointSlider value={agent.settings.verbosity} onChange={(v) => updateAgentSetting(id, 'verbosity', v)} labels={['Brief', 'Medium', 'Full']} color={color} /></div>
-                    <div><div className="text-[8px] text-gray-500 mb-0.5">Tension</div><ThreePointSlider value={agent.settings.tension} onChange={(v) => updateAgentSetting(id, 'tension', v)} labels={['Chill', 'Medium', 'Spicy']} color={color} /></div>
-                    <div><div className="text-[8px] text-gray-500 mb-0.5">Creativity</div><ThreePointSlider value={agent.settings.creativity} onChange={(v) => updateAgentSetting(id, 'creativity', v)} labels={['Safe', 'Balanced', 'Wild']} color={color} /></div>
+                  <div className="space-y-3">
+                    <div><div className="text-xs text-gray-500 mb-1">Speed</div><ThreePointSlider value={agent.settings.speed} onChange={(v) => updateAgentSetting(id, 'speed', v)} labels={['Deep', 'Medium', 'Fast']} color={color} /></div>
+                    <div><div className="text-xs text-gray-500 mb-1">Verbosity</div><ThreePointSlider value={agent.settings.verbosity} onChange={(v) => updateAgentSetting(id, 'verbosity', v)} labels={['Brief', 'Medium', 'Full']} color={color} /></div>
+                    <div><div className="text-xs text-gray-500 mb-1">Tension</div><ThreePointSlider value={agent.settings.tension} onChange={(v) => updateAgentSetting(id, 'tension', v)} labels={['Chill', 'Medium', 'Spicy']} color={color} /></div>
+                    <div><div className="text-xs text-gray-500 mb-1">Creativity</div><ThreePointSlider value={agent.settings.creativity} onChange={(v) => updateAgentSetting(id, 'creativity', v)} labels={['Safe', 'Balanced', 'Wild']} color={color} /></div>
                   </div>
                 </div>
               )
@@ -919,40 +824,34 @@ export default function LoungePage() {
           </div>
 
           {/* Scribe */}
-          <div className="border-t border-gray-100 p-2">
-            <button onClick={() => setShowScribe(!showScribe)} className="w-full flex items-center justify-between text-[9px] font-medium text-gray-500">
-              <span className="flex items-center gap-1">
-                <FlashLogo className="w-3 h-3" />
-                <span>Scribe for agents</span>
-              </span>
-              <span className="flex items-center gap-1">
-                <span className="text-gray-400">({scribeNotes.length})</span>
-                {showScribe ? <ChevronDown className="w-3 h-3" /> : <ChevronUp className="w-3 h-3" />}
-              </span>
+          <div className="border-t border-gray-100 p-3">
+            <button onClick={() => setShowScribe(!showScribe)} className="w-full flex items-center justify-between text-xs font-medium text-gray-500">
+              <span className="flex items-center gap-1.5"><FlashLogo className="w-4 h-4" />Scribe for agents</span>
+              <span className="flex items-center gap-1"><span className="text-gray-400">({scribeNotes.length})</span>{showScribe ? <ChevronDown className="w-4 h-4" /> : <ChevronUp className="w-4 h-4" />}</span>
             </button>
-            <div className="text-[7px] text-gray-400 mt-0.5">Model: {SCRIBE_MODEL}</div>
+            <div className="text-xs text-gray-400 mt-0.5">Model: {SCRIBE_MODEL}</div>
             
             {showScribe && scribeNotes.length > 0 && (
               <>
-                <div className="flex gap-1 mt-1.5 mb-1">
-                  <button onClick={copyScribeNotes} className="flex-1 flex items-center justify-center gap-1 text-[8px] py-1 bg-gray-100 hover:bg-gray-200 rounded">
-                    {scribeCopied ? <Check className="w-2.5 h-2.5 text-green-500" /> : <Copy className="w-2.5 h-2.5" />}{scribeCopied ? 'Copied' : 'Copy'}
+                <div className="flex gap-2 mt-2 mb-2">
+                  <button onClick={() => { navigator.clipboard.writeText(scribeNotes.map(n => n.content).join('\n\n')); setScribeCopied(true); setTimeout(() => setScribeCopied(false), 2000) }} className="flex-1 flex items-center justify-center gap-1 text-xs py-1.5 bg-gray-100 hover:bg-gray-200 rounded">
+                    {scribeCopied ? <Check className="w-3 h-3 text-green-500" /> : <Copy className="w-3 h-3" />}{scribeCopied ? 'Copied' : 'Copy'}
                   </button>
-                  <button onClick={() => startNewConversation(scribeNotes.map(n => n.content).join('\n\n'))} className="flex-1 flex items-center justify-center gap-1 text-[8px] py-1 bg-blue-100 hover:bg-blue-200 text-blue-700 rounded">
-                    <RotateCcw className="w-2.5 h-2.5" />New from scribe
+                  <button onClick={() => startNewConversation(scribeNotes.map(n => n.content).join('\n\n'))} className="flex-1 flex items-center justify-center gap-1 text-xs py-1.5 bg-blue-100 hover:bg-blue-200 text-blue-700 rounded">
+                    <RotateCcw className="w-3 h-3" />New
                   </button>
                 </div>
-                <div className="max-h-40 overflow-y-auto space-y-1.5">
+                <div className="max-h-48 overflow-y-auto space-y-2">
                   {scribeNotes.map((note, i) => (
-                    <div key={i} className="text-[9px] text-gray-600 bg-yellow-50 rounded p-2 leading-relaxed">
-                      <div className="text-[8px] text-yellow-600 mb-1">{formatTime(note.timestamp)}</div>
+                    <div key={i} className="text-xs text-gray-600 bg-yellow-50 rounded-lg p-2.5 leading-relaxed">
+                      <div className="text-xs text-yellow-600 mb-1">{formatTime(note.timestamp)}</div>
                       <FormattedText content={note.content} />
                     </div>
                   ))}
                 </div>
               </>
             )}
-            {showScribe && scribeNotes.length === 0 && <div className="mt-1.5 text-[8px] text-gray-400 italic">Notes appear every ~4 exchanges...</div>}
+            {showScribe && scribeNotes.length === 0 && <div className="mt-2 text-xs text-gray-400 italic">Notes appear after ~4 exchanges...</div>}
           </div>
         </div>
       </div>
