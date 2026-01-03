@@ -1,15 +1,13 @@
 import { auth } from '@clerk/nextjs/server'
 import { getApiKeys } from '@/lib/vault'
+import { 
+  getActiveClaudeModel, 
+  getActiveGeminiModel, 
+  getScribeModel,
+  calculateCost
+} from '@/lib/models'
 
 export const runtime = 'edge'
-
-// Pricing per 1M tokens
-const PRICING = {
-  'claude-opus-4-5-20251101': { input: 5.00, output: 25.00 },
-  'claude-sonnet-4-20250514': { input: 3.00, output: 15.00 },
-  'gemini-3-pro-preview': { input: 1.25, output: 10.00 },
-  'gemini-3-flash-preview': { input: 0.50, output: 3.00 }
-}
 
 interface AgentSettings {
   verbosity: number
@@ -110,17 +108,19 @@ function parseThinking(text: string): { thinking: string; content: string } {
 
 function cleanGeminiResponse(text: string): string {
   return text
+    // Remove any thinking/reasoning blocks that leak through
+    .replace(/<thinking>[\s\S]*?<\/thinking>/gi, '')
+    .replace(/\[thinking\][\s\S]*?\[\/thinking\]/gi, '')
+    .replace(/```thinking[\s\S]*?```/gi, '')
+    // Clean backslash escapes
     .replace(/\\([*_`#])/g, '$1')
+    // Fix single asterisks to double
     .replace(/\s\*([^*\n]+)\*\s/g, ' **$1** ')
+    // Clean excessive line breaks
     .replace(/\n{3,}/g, '\n\n')
+    // Remove weird unicode
     .replace(/[\u200B-\u200D\uFEFF]/g, '')
     .trim()
-}
-
-function calculateCost(model: string, inputTokens: number, outputTokens: number): number {
-  const pricing = PRICING[model as keyof typeof PRICING]
-  if (!pricing) return 0
-  return (inputTokens / 1_000_000 * pricing.input) + (outputTokens / 1_000_000 * pricing.output)
 }
 
 async function generateScribeSummary(
@@ -130,6 +130,7 @@ async function generateScribeSummary(
 ): Promise<string> {
   if (messages.length < 4) return ''
   
+  const scribeModel = getScribeModel()
   const recentMessages = messages.slice(-8).map(m => `${m.role}: ${m.content.slice(0, 500)}`).join('\n\n')
   
   const prompt = `You are a Scribe AI taking notes on a conversation.
@@ -143,20 +144,42 @@ ${recentMessages}
 Write a concise summary (under 100 words) capturing main topic, key points from each agent, and any conclusions. Use **bold** headers.`
 
   try {
+    // Build generation config based on model capabilities
+    const generationConfig: Record<string, unknown> = {
+      temperature: 0.3,
+      maxOutputTokens: 200
+    }
+    
+    if (scribeModel.apiConfig?.thinkingLevel) {
+      generationConfig.thinkingConfig = { 
+        thinkingLevel: scribeModel.apiConfig.thinkingLevel 
+      }
+    }
+    
     const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent?key=${googleKey}`,
+      `https://generativelanguage.googleapis.com/v1beta/models/${scribeModel.id}:generateContent?key=${googleKey}`,
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           contents: [{ role: 'user', parts: [{ text: prompt }] }],
-          generationConfig: { temperature: 0.3, maxOutputTokens: 200 }
+          generationConfig
         })
       }
     )
     
     const data = await response.json()
-    return cleanGeminiResponse(data.candidates?.[0]?.content?.parts?.[0]?.text || '')
+    
+    // Handle multi-part response
+    const parts = data.candidates?.[0]?.content?.parts || []
+    let rawText = ''
+    for (const part of parts) {
+      if (part.text && !part.thought) {
+        rawText += part.text
+      }
+    }
+    
+    return cleanGeminiResponse(rawText)
   } catch (e) {
     console.error('Scribe error:', e)
     return ''
@@ -206,13 +229,9 @@ export async function POST(request: Request) {
           let firstAgentResponse = ''
           
           const callClaude = async (prompt: string): Promise<string> => {
+            const model = getActiveClaudeModel(claudeSettings.speed)
+            
             send({ agent: 'claude', type: 'thinking', content: 'analyzing...' })
-            
-            const model = claudeSettings.speed === 3 
-              ? 'claude-sonnet-4-20250514' 
-              : 'claude-opus-4-5-20251101'
-            
-            const modelDisplay = claudeSettings.speed === 3 ? 'Sonnet 4' : 'Opus 4.5'
             
             try {
               const response = await fetch('https://api.anthropic.com/v1/messages', {
@@ -223,7 +242,7 @@ export async function POST(request: Request) {
                   'anthropic-version': '2023-06-01'
                 },
                 body: JSON.stringify({
-                  model,
+                  model: model.id,
                   max_tokens: getMaxTokens(claudeSettings.speed, claudeSettings.verbosity),
                   temperature: getTemperature(claudeSettings.creativity),
                   system: buildClaudeSystemPrompt(claudeSettings, geminiSettings, scribeContext, refreshedAgents.claude || false),
@@ -235,7 +254,7 @@ export async function POST(request: Request) {
               
               if (data.error) {
                 console.error('Claude API error:', data.error)
-                send({ agent: 'claude', type: 'complete', content: 'Sorry, I encountered an error.', model: modelDisplay, tokens: { in: 0, out: 0 }, cost: 0 })
+                send({ agent: 'claude', type: 'complete', content: `Error: ${data.error.message || 'API error'}`, model: model.displayName, tokens: { in: 0, out: 0 }, cost: 0 })
                 return ''
               }
               
@@ -244,7 +263,7 @@ export async function POST(request: Request) {
               
               const inputTokens = data.usage?.input_tokens || 0
               const outputTokens = data.usage?.output_tokens || 0
-              const cost = calculateCost(model, inputTokens, outputTokens)
+              const cost = calculateCost(model.id, inputTokens, outputTokens)
               
               if (thinking) {
                 send({ agent: 'claude', type: 'thinking', content: thinking })
@@ -254,37 +273,45 @@ export async function POST(request: Request) {
               send({
                 agent: 'claude',
                 type: 'complete',
-                content: content || 'I apologize, but I couldn\'t generate a response.',
+                content: content || text || 'I encountered an issue generating a response.',
                 thinking,
-                model: modelDisplay,
-                modelId: model,
+                model: model.displayName,
+                modelId: model.id,
                 tokens: { in: inputTokens, out: outputTokens },
                 cost
               })
               
-              return content
+              return content || text
             } catch (e) {
               console.error('Claude call failed:', e)
-              send({ agent: 'claude', type: 'complete', content: 'Sorry, I encountered an error.', model: modelDisplay, tokens: { in: 0, out: 0 }, cost: 0 })
+              send({ agent: 'claude', type: 'complete', content: 'Sorry, I encountered an error.', model: model.displayName, tokens: { in: 0, out: 0 }, cost: 0 })
               return ''
             }
           }
           
           const callGemini = async (prompt: string): Promise<string> => {
+            const model = getActiveGeminiModel(geminiSettings.speed)
+            
             send({ agent: 'gemini', type: 'thinking', content: 'considering...' })
-            
-            // Use Gemini 3 models
-            const model = geminiSettings.speed === 3 
-              ? 'gemini-3-flash-preview'
-              : 'gemini-3-pro-preview'
-            
-            const modelDisplay = geminiSettings.speed === 3 ? 'Flash 3' : 'Pro 3'
             
             const systemPrompt = buildGeminiSystemPrompt(geminiSettings, claudeSettings, scribeContext, refreshedAgents.gemini || false)
             
             try {
+              // Build generation config based on model capabilities
+              const generationConfig: Record<string, unknown> = {
+                temperature: getTemperature(geminiSettings.creativity),
+                maxOutputTokens: getMaxTokens(geminiSettings.speed, geminiSettings.verbosity)
+              }
+              
+              // Add thinking config if model supports it
+              if (model.apiConfig?.thinkingLevel) {
+                generationConfig.thinkingConfig = { 
+                  thinkingLevel: model.apiConfig.thinkingLevel 
+                }
+              }
+              
               const response = await fetch(
-                `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${keys.google!}`,
+                `https://generativelanguage.googleapis.com/v1beta/models/${model.id}:generateContent?key=${keys.google!}`,
                 {
                   method: 'POST',
                   headers: { 'Content-Type': 'application/json' },
@@ -293,10 +320,7 @@ export async function POST(request: Request) {
                       role: 'user',
                       parts: [{ text: `${systemPrompt}\n\n---\n\n${prompt}` }]
                     }],
-                    generationConfig: {
-                      temperature: getTemperature(geminiSettings.creativity),
-                      maxOutputTokens: getMaxTokens(geminiSettings.speed, geminiSettings.verbosity)
-                    }
+                    generationConfig
                   })
                 }
               )
@@ -305,17 +329,32 @@ export async function POST(request: Request) {
               
               if (data.error) {
                 console.error('Gemini API error:', data.error)
-                send({ agent: 'gemini', type: 'complete', content: 'Sorry, I encountered an error.', model: modelDisplay, tokens: { in: 0, out: 0 }, cost: 0 })
+                send({ agent: 'gemini', type: 'complete', content: `Error: ${data.error.message || 'API error'}`, model: model.displayName, tokens: { in: 0, out: 0 }, cost: 0 })
                 return ''
               }
               
-              const rawText = data.candidates?.[0]?.content?.parts?.[0]?.text || ''
+              // Handle Gemini 3 response format - may have multiple parts including thinking
+              const parts = data.candidates?.[0]?.content?.parts || []
+              let rawText = ''
+              for (const part of parts) {
+                // Skip thought parts, only get text parts
+                if (part.text && !part.thought) {
+                  rawText += part.text
+                }
+              }
+              
+              if (!rawText) {
+                console.error('No text in Gemini response:', JSON.stringify(data))
+                send({ agent: 'gemini', type: 'complete', content: 'I encountered an issue generating a response.', model: model.displayName, tokens: { in: 0, out: 0 }, cost: 0 })
+                return ''
+              }
+              
               const cleanedText = cleanGeminiResponse(rawText)
               const { thinking, content } = parseThinking(cleanedText)
               
               const inputTokens = data.usageMetadata?.promptTokenCount || Math.ceil(prompt.length / 4)
               const outputTokens = data.usageMetadata?.candidatesTokenCount || Math.ceil(cleanedText.length / 4)
-              const cost = calculateCost(model, inputTokens, outputTokens)
+              const cost = calculateCost(model.id, inputTokens, outputTokens)
               
               if (thinking) {
                 send({ agent: 'gemini', type: 'thinking', content: thinking })
@@ -325,18 +364,18 @@ export async function POST(request: Request) {
               send({
                 agent: 'gemini',
                 type: 'complete',
-                content: content || 'I apologize, but I couldn\'t generate a response.',
+                content: content || cleanedText,
                 thinking,
-                model: modelDisplay,
-                modelId: model,
+                model: model.displayName,
+                modelId: model.id,
                 tokens: { in: inputTokens, out: outputTokens },
                 cost
               })
               
-              return content
+              return content || cleanedText
             } catch (e) {
               console.error('Gemini call failed:', e)
-              send({ agent: 'gemini', type: 'complete', content: 'Sorry, I encountered an error.', model: modelDisplay, tokens: { in: 0, out: 0 }, cost: 0 })
+              send({ agent: 'gemini', type: 'complete', content: 'Sorry, I encountered an error.', model: model.displayName, tokens: { in: 0, out: 0 }, cost: 0 })
               return ''
             }
           }

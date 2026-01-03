@@ -191,43 +191,118 @@ function CodeBlock({ code, language }: { code: string; language?: string }) {
 function FormattedText({ content }: { content: string }) {
   const elements: React.ReactNode[] = []
   let remaining = content, key = 0
+  
   while (remaining.length > 0) {
+    // Check for code blocks first
     const codeBlockMatch = remaining.match(/^```(\w*)\n?([\s\S]*?)```/)
-    if (codeBlockMatch) { elements.push(<CodeBlock key={key++} code={codeBlockMatch[2].trim()} language={codeBlockMatch[1]} />); remaining = remaining.slice(codeBlockMatch[0].length); continue }
+    if (codeBlockMatch) { 
+      elements.push(<CodeBlock key={key++} code={codeBlockMatch[2].trim()} language={codeBlockMatch[1]} />)
+      remaining = remaining.slice(codeBlockMatch[0].length)
+      continue 
+    }
+    
+    // Check for tables
     const tableMatch = remaining.match(/^(\|[^\n]+\|\n\|[-:\s|]+\|\n(?:\|[^\n]+\|\n?)+)/)
     if (tableMatch) {
-      const lines = tableMatch[1].trim().split('\n'), headers = lines[0].split('|').filter(c => c.trim()), rows = lines.slice(2).map(row => row.split('|').filter(c => c.trim()))
-      elements.push(<table key={key++} className="text-sm border-collapse w-full my-2"><thead><tr className="bg-gray-100">{headers.map((h, i) => <th key={i} className="border border-gray-200 px-3 py-1.5 text-left font-medium">{h.trim()}</th>)}</tr></thead><tbody>{rows.map((row, i) => <tr key={i} className={i % 2 === 0 ? '' : 'bg-gray-50'}>{row.map((cell, j) => <td key={j} className="border border-gray-200 px-3 py-1.5">{cell.trim()}</td>)}</tr>)}</tbody></table>)
-      remaining = remaining.slice(tableMatch[0].length); continue
+      const lines = tableMatch[1].trim().split('\n')
+      const headers = lines[0].split('|').filter(c => c.trim())
+      const rows = lines.slice(2).map(row => row.split('|').filter(c => c.trim()))
+      elements.push(
+        <table key={key++} className="text-sm border-collapse w-full my-3">
+          <thead>
+            <tr className="bg-gray-100">
+              {headers.map((h, i) => <th key={i} className="border border-gray-200 px-3 py-1.5 text-left font-medium">{h.trim()}</th>)}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row, i) => (
+              <tr key={i} className={i % 2 === 0 ? '' : 'bg-gray-50'}>
+                {row.map((cell, j) => <td key={j} className="border border-gray-200 px-3 py-1.5">{cell.trim()}</td>)}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )
+      remaining = remaining.slice(tableMatch[0].length)
+      continue
     }
-    const nextCode = remaining.indexOf('```'), nextTable = remaining.search(/\n\|[^\n]+\|/)
+    
+    // Find next special block
+    const nextCode = remaining.indexOf('```')
+    const nextTable = remaining.search(/\n\|[^\n]+\|/)
     let nextBreak = remaining.length
     if (nextCode !== -1 && nextCode < nextBreak) nextBreak = nextCode
     if (nextTable !== -1 && nextTable < nextBreak) nextBreak = nextTable + 1
+    
+    // Process text chunk with paragraphs
     const textChunk = remaining.slice(0, nextBreak)
-    if (textChunk) elements.push(<span key={key++}>{renderInlineFormatting(textChunk)}</span>)
+    if (textChunk) {
+      // Split into paragraphs on double newlines
+      const paragraphs = textChunk.split(/\n\n+/)
+      paragraphs.forEach((para, i) => {
+        if (para.trim()) {
+          // Handle single newlines as line breaks within paragraph
+          const lines = para.split('\n')
+          elements.push(
+            <p key={key++} className={i > 0 ? 'mt-2' : ''}>
+              {lines.map((line, j) => (
+                <span key={j}>
+                  {renderInlineFormatting(line)}
+                  {j < lines.length - 1 && <br />}
+                </span>
+              ))}
+            </p>
+          )
+        }
+      })
+    }
     remaining = remaining.slice(nextBreak)
   }
+  
   return <>{elements}</>
 }
 
 function renderInlineFormatting(text: string): React.ReactNode[] {
-  return text.split(/(\*\*[^*]+\*\*|\*[^*]+\*|`[^`]+`|\[([^\]]+)\]\(([^)]+)\))/g).map((part, i) => {
+  const parts = text.split(/(\*\*[^*]+\*\*|\*[^*]+\*|`[^`]+`|\[([^\]]+)\]\(([^)]+)\))/g)
+  return parts.map((part, i) => {
     if (!part) return null
-    if (part.startsWith('**') && part.endsWith('**')) return <strong key={i} className="font-semibold">{part.slice(2, -2)}</strong>
-    if (part.startsWith('*') && part.endsWith('*') && !part.startsWith('**')) return <em key={i}>{part.slice(1, -1)}</em>
-    if (part.startsWith('`') && part.endsWith('`')) return <code key={i} className="bg-gray-100 px-1.5 py-0.5 rounded text-sm font-mono">{part.slice(1, -1)}</code>
+    if (part.startsWith('**') && part.endsWith('**')) {
+      return <strong key={i} className="font-semibold">{part.slice(2, -2)}</strong>
+    }
+    if (part.startsWith('*') && part.endsWith('*') && !part.startsWith('**')) {
+      return <em key={i}>{part.slice(1, -1)}</em>
+    }
+    if (part.startsWith('`') && part.endsWith('`')) {
+      return <code key={i} className="bg-gray-100 px-1.5 py-0.5 rounded text-sm font-mono">{part.slice(1, -1)}</code>
+    }
     const linkMatch = part.match(/\[([^\]]+)\]\(([^)]+)\)/)
-    if (linkMatch) return <a key={i} href={linkMatch[2]} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline inline-flex items-center gap-0.5">{linkMatch[1]}<ExternalLink className="w-3 h-3" /></a>
+    if (linkMatch) {
+      return (
+        <a key={i} href={linkMatch[2]} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline inline-flex items-center gap-0.5">
+          {linkMatch[1]}<ExternalLink className="w-3 h-3" />
+        </a>
+      )
+    }
     return part
   }).filter(Boolean)
 }
+
+import { getScribeModel } from '@/lib/models'
 
 function formatTime(date: Date): string { return date.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true }) }
 function formatDuration(minutes: number): string { return minutes < 60 ? `${minutes} min` : `${Math.floor(minutes / 60)}h ${minutes % 60}m` }
 function formatCost(cost: number): string { 
   if (cost < 0.01) return 'near zero'
   return `$${cost.toFixed(2)}` 
+}
+
+// Get scribe model name dynamically
+function getScribeModelName(): string {
+  try {
+    return getScribeModel().fullName
+  } catch {
+    return 'Gemini 3 Flash'
+  }
 }
 
 // Stats Modal
@@ -311,7 +386,6 @@ function StatsModal({ stats, topic, onClose }: { stats: ConversationStats; topic
 }
 
 const STORAGE_KEY = 'lounge-data-v7'
-const SCRIBE_MODEL = 'Gemini 3 Flash'
 
 export default function LoungePage() {
   const { user, isLoaded } = useUser()
@@ -829,7 +903,7 @@ export default function LoungePage() {
               <span className="flex items-center gap-1.5"><FlashLogo className="w-4 h-4" />Scribe for agents</span>
               <span className="flex items-center gap-1"><span className="text-gray-400">({scribeNotes.length})</span>{showScribe ? <ChevronDown className="w-4 h-4" /> : <ChevronUp className="w-4 h-4" />}</span>
             </button>
-            <div className="text-xs text-gray-400 mt-0.5">Model: {SCRIBE_MODEL}</div>
+            <div className="text-xs text-gray-400 mt-0.5">Model: {getScribeModelName()}</div>
             
             {showScribe && scribeNotes.length > 0 && (
               <>
