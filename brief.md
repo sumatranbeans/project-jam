@@ -26,6 +26,7 @@ The core vision: **Games so good that families can't help but recommend them to 
 11. [Inspiration & References](#inspiration--references)
 12. [Concept Presentation Guidelines](#concept-presentation-guidelines)
 13. [Development Phases](#development-phases)
+14. [Next Steps: Instructions for Concept Development](#next-steps-instructions-for-concept-development)
 
 ---
 
@@ -419,6 +420,12 @@ After playing, will someone say: "You won't believe what happened..."? If yes, w
 
 ## Concept Presentation Guidelines
 
+### Deliverable: concepts.md
+
+**All game concepts must be documented in a separate file called `concepts.md`.**
+
+This keeps the brief as the strategic foundation document, while concepts live in their own dedicated file that can be iterated on independently.
+
 ### How Concepts Should Be Presented
 
 Each game concept should be presented in a format that is:
@@ -444,11 +451,32 @@ For each game concept, include:
 
 ### Visual Mockup Requirements
 
-- Use AI image generation (Google Imagen, etc.) to create concept visuals
-- Show what the TV screen might look like
-- Show what the phone interface might look like
-- Capture the vibe and aesthetic
-- Make it attractive and exciting
+Create visual mockups and concept art to bring each game to life. The goal is to make concepts easy to understand at a glance—even for a child.
+
+**Recommended Tools for Visual Generation:**
+
+| Tool | Best For | Notes |
+|------|----------|-------|
+| **Google Imagen 3** | High-quality concept art, game scenes | Excellent for vibrant, playful illustrations |
+| **Ideogram** | Text-heavy mockups, UI concepts | Good at rendering text in images |
+| **Midjourney** | Stylized, artistic concept art | Great for establishing visual mood |
+| **DALL-E 3** | Quick concept visualization | Good general-purpose option |
+| **Figma / Canva** | UI mockups, wireframes | For more precise interface designs |
+| **Whimsical / FigJam** | Flow diagrams, game mechanics | For explaining how games work |
+
+**What to Create:**
+
+- Hero image showing the game "in action" (family playing, energy captured)
+- TV screen mockup (what everyone sees on the shared display)
+- Phone screen mockup (what individual players see on their devices)
+- "The Moment" illustration (the signature magic moment of the game)
+
+**Visual Style Guide:**
+
+- Bright, vibrant, joyful colors
+- Playful, approachable, modern aesthetic
+- Simple and clean, not cluttered
+- Reference: Netflix's Boggle/Pictionary games
 
 ### Language & Accessibility
 
@@ -456,6 +484,7 @@ For each game concept, include:
 - Avoid jargon or complex terminology
 - Use examples and analogies
 - Keep paragraphs short and scannable
+- If an adult and a child both read the concept, both should "get it"
 
 ---
 
@@ -463,13 +492,24 @@ For each game concept, include:
 
 ### Phase 1: Concept Development (Current Phase)
 
-**Goal**: Generate 5-10 original, creative game concepts
+**Goal**: Generate 5 original, creative game concepts
 
-- Brainstorm without constraints
-- Prioritize originality and innovation
-- Create visual mockups for each concept
-- Evaluate against project criteria
-- Select top concepts for further development
+**Deliverable**: `concepts.md` file containing 5 fully-developed game concepts
+
+**Process**:
+1. Read and internalize this brief (`brief.md`)
+2. Brainstorm without constraints—prioritize originality and innovation
+3. Develop each concept using the template in "Concept Presentation Guidelines"
+4. Create visual mockups using recommended AI image generation tools
+5. Evaluate each concept against the Core Criteria Checklist
+6. Document all 5 concepts in `concepts.md`
+
+**Definition of Done**:
+- [ ] 5 unique, original game concepts documented
+- [ ] Each concept follows the presentation template
+- [ ] Visual mockups created for each concept
+- [ ] Concepts are understandable by an 8-year-old
+- [ ] All concepts align with the constraints in this brief
 
 ### Phase 2: Concept Validation (Future)
 
@@ -530,12 +570,57 @@ If you can only remember three things:
 
 ---
 
+## Next Steps: Instructions for Concept Development
+
+### For Any Agent or Team Member Reading This Brief
+
+Your task is to create **5 original game concepts** based on this brief.
+
+**Step-by-Step Instructions:**
+
+1. **Read this entire brief** to understand the vision, constraints, and requirements
+
+2. **Brainstorm game concepts** that are:
+   - Genuinely original (not clones of existing games)
+   - Snackable (1-5 minute sessions)
+   - Multiplayer (2-6 players)
+   - Educational (explicit or sneaky learning)
+   - Fun for ages 6+ through adults
+   - Designed for TV + phone input setup
+
+3. **For each concept, create:**
+   - A catchy game name and tagline
+   - Clear explanation of how to play (simple enough for a child)
+   - Visual mockups using AI image generation tools
+   - Description of the "magic moment" and educational value
+   - Example walkthrough of one round
+
+4. **Document all concepts in `concepts.md`** using the template provided in this brief
+
+5. **Validate each concept** against the Core Criteria Checklist before finalizing
+
+### Quality Bar
+
+Before submitting a concept, ask:
+- Would a 7-year-old understand how to play after one explanation?
+- Would a 40-year-old genuinely enjoy playing this?
+- Does this game create moments worth talking about later?
+- Is this original enough that people would say "I've never seen this before"?
+- Would families recommend this to other families?
+
+If the answer to any of these is "no," iterate on the concept.
+
+---
+
 ## Document History
 
 | Version | Date | Notes |
 |---------|------|-------|
 | 1.0 | 2026-01-10 | Initial brief created from brainstorming session |
+| 1.1 | 2026-01-10 | Added deliverable specifications, visual tools, and agent instructions |
 
 ---
 
 *This document serves as the foundational brief for Project Jam. All game concepts and development decisions should align with the principles and requirements outlined here.*
+
+**Next Deliverable**: `concepts.md` — 5 original game concepts with visual mockups
