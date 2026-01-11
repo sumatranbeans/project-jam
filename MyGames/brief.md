@@ -1,11 +1,11 @@
-# Project Jam: Multiplayer Family Games
+# Multiplayer Family Games
 ## Creative & Product Brief
 
 ---
 
 ## Executive Summary
 
-**Project Jam** is an initiative to develop 5-10 original, snackable multiplayer games designed for families and groups. These games prioritize fun, education, social bonding, and accessibility for players aged 6+ through adulthood.
+An initiative to develop 5-10 original, snackable multiplayer games designed for families and groups. These games prioritize fun, education, social bonding, and accessibility for players aged 6+ through adulthood.
 
 The core vision: **Games so good that families can't help but recommend them to other families.** Word-of-mouth virality through genuine delight, not marketing.
 
@@ -13,20 +13,20 @@ The core vision: **Games so good that families can't help but recommend them to 
 
 ## Table of Contents
 
-1. [Project Vision](#project-vision)
-2. [Target Audience](#target-audience)
-3. [Technical Setup](#technical-setup)
-4. [Core Design Principles](#core-design-principles)
-5. [Game Requirements](#game-requirements)
-6. [Educational Philosophy](#educational-philosophy)
-7. [Aesthetic & Vibe](#aesthetic--vibe)
-8. [The Magic Moments](#the-magic-moments)
-9. [Success Metrics](#success-metrics)
-10. [Constraints & Boundaries](#constraints--boundaries)
-11. [Inspiration & References](#inspiration--references)
-12. [Concept Presentation Guidelines](#concept-presentation-guidelines)
-13. [Development Phases](#development-phases)
-14. [Next Steps: Instructions for Concept Development](#next-steps-instructions-for-concept-development)
+1. Project Vision
+2. Target Audience
+3. Technical Setup
+4. Core Design Principles
+5. Game Requirements
+6. Educational Philosophy
+7. Aesthetic & Vibe
+8. The Magic Moments
+9. Success Metrics
+10. Constraints & Boundaries
+11. Inspiration & References
+12. Concept Presentation Guidelines
+13. Development Phases
+14. Next Steps: Instructions for Concept Development
 
 ---
 
@@ -354,35 +354,35 @@ After playing, will someone say: "You won't believe what happened..."? If yes, w
 
 ### Must Have
 
-- [x] Suitable for ages 6+
-- [x] Playable by 2-6 players
-- [x] Session length under 5 minutes
-- [x] Works on phones + shared screen setup
-- [x] Educational element (explicit or hidden)
-- [x] Fun for both kids AND adults
-- [x] Original concepts (not direct clones)
-- [x] Positive and uplifting tone
-- [x] Simple enough to start in 30 seconds
+- Suitable for ages 6+
+- Playable by 2-6 players
+- Session length under 5 minutes
+- Works on phones + shared screen setup
+- Educational element (explicit or hidden)
+- Fun for both kids AND adults
+- Original concepts (not direct clones)
+- Positive and uplifting tone
+- Simple enough to start in 30 seconds
 
 ### Must NOT Have
 
-- [ ] Violence, blood, gore, or "killers"
-- [ ] Overly complex rules requiring long explanations
-- [ ] Heavy reading requirements that exclude younger kids
-- [ ] Mechanics that always favor adults/experienced players
-- [ ] Frustrating difficulty spikes
-- [ ] Anything negative, dark, or serious
-- [ ] Complex physical props or materials
-- [ ] Phone sensor requirements (accelerometer, etc.)
+- Violence, blood, gore, or "killers"
+- Overly complex rules requiring long explanations
+- Heavy reading requirements that exclude younger kids
+- Mechanics that always favor adults/experienced players
+- Frustrating difficulty spikes
+- Anything negative, dark, or serious
+- Complex physical props or materials
+- Phone sensor requirements (accelerometer, etc.)
 
 ### Nice to Have
 
-- [ ] Team play options
-- [ ] Difficulty adjustment
-- [ ] Quick and full game modes
-- [ ] Drop-in/drop-out capability
-- [ ] Avatar customization
-- [ ] Multiple language support (future)
+- Team play options
+- Difficulty adjustment
+- Quick and full game modes
+- Drop-in/drop-out capability
+- Avatar customization
+- Multiple language support (future)
 
 ---
 
@@ -422,7 +422,7 @@ After playing, will someone say: "You won't believe what happened..."? If yes, w
 
 ### Deliverable: concepts.md
 
-**All game concepts must be documented in a separate file called `concepts.md`.**
+**All game concepts must be documented in a separate file called concepts.md.**
 
 This keeps the brief as the strategic foundation document, while concepts live in their own dedicated file that can be iterated on independently.
 
@@ -494,22 +494,22 @@ Create visual mockups and concept art to bring each game to life. The goal is to
 
 **Goal**: Generate 5 original, creative game concepts
 
-**Deliverable**: `concepts.md` file containing 5 fully-developed game concepts
+**Deliverable**: concepts.md file containing 5 fully-developed game concepts
 
 **Process**:
-1. Read and internalize this brief (`brief.md`)
+1. Read and internalize this brief (brief.md)
 2. Brainstorm without constraints—prioritize originality and innovation
 3. Develop each concept using the template in "Concept Presentation Guidelines"
 4. Create visual mockups using recommended AI image generation tools
 5. Evaluate each concept against the Core Criteria Checklist
-6. Document all 5 concepts in `concepts.md`
+6. Document all 5 concepts in concepts.md
 
 **Definition of Done**:
-- [ ] 5 unique, original game concepts documented
-- [ ] Each concept follows the presentation template
-- [ ] Visual mockups created for each concept
-- [ ] Concepts are understandable by an 8-year-old
-- [ ] All concepts align with the constraints in this brief
+- 5 unique, original game concepts documented
+- Each concept follows the presentation template
+- Visual mockups created for each concept
+- Concepts are understandable by an 8-year-old
+- All concepts align with the constraints in this brief
 
 ### Phase 2: Concept Validation (Future)
 
@@ -551,14 +551,14 @@ Create visual mockups and concept art to bring each game to life. The goal is to
 
 When evaluating any concept, ask:
 
-- [ ] Can a 6-year-old understand it?
-- [ ] Can an adult enjoy it?
-- [ ] Does it take under 5 minutes?
-- [ ] Is it fun to watch others play?
-- [ ] Does it teach something?
-- [ ] Will it create "remember when..." moments?
-- [ ] Is it original, not a clone?
-- [ ] Would people recommend it to friends?
+- Can a 6-year-old understand it?
+- Can an adult enjoy it?
+- Does it take under 5 minutes?
+- Is it fun to watch others play?
+- Does it teach something?
+- Will it create "remember when..." moments?
+- Is it original, not a clone?
+- Would people recommend it to friends?
 
 ### The Three Words
 
@@ -595,7 +595,7 @@ Your task is to create **5 original game concepts** based on this brief.
    - Description of the "magic moment" and educational value
    - Example walkthrough of one round
 
-4. **Document all concepts in `concepts.md`** using the template provided in this brief
+4. **Document all concepts in concepts.md** using the template provided in this brief
 
 5. **Validate each concept** against the Core Criteria Checklist before finalizing
 
@@ -616,11 +616,10 @@ If the answer to any of these is "no," iterate on the concept.
 
 | Version | Date | Notes |
 |---------|------|-------|
-| 1.0 | 2026-01-10 | Initial brief created from brainstorming session |
-| 1.1 | 2026-01-10 | Added deliverable specifications, visual tools, and agent instructions |
+| 1.0 | 2026-01-11 | Initial brief created from brainstorming session |
 
 ---
 
-*This document serves as the foundational brief for Project Jam. All game concepts and development decisions should align with the principles and requirements outlined here.*
+*This document serves as the foundational brief. All game concepts and development decisions should align with the principles and requirements outlined here.*
 
-**Next Deliverable**: `concepts.md` — 5 original game concepts with visual mockups
+**Next Deliverable**: concepts.md — 5 original game concepts with visual mockups
